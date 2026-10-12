@@ -63,13 +63,17 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
     last_err: Exception | None = None
 
     if config.type == "mssql":
-        import pyodbc
-        from .db_connectors import MSSQL_DRIVER
-        driver = MSSQL_DRIVER or "ODBC Driver 18 for SQL Server"
-        conn_str = f"DRIVER={{{driver}}};SERVER={config.host},{config.port};UID=sydafa;PWD=sydafa;Database=master;TrustServerCertificate=yes;"
+        import pymssql
         while time.time() < deadline:
             try:
-                conn = pyodbc.connect(conn_str, timeout=3)
+                conn = pymssql.connect(
+                    server=config.host,
+                    port=config.port,
+                    user="sydafa",
+                    password="sydafa",
+                    database="master",
+                    login_timeout=3,
+                )
                 conn.close()
                 return
             except Exception as e:
