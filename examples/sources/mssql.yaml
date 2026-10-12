@@ -1,4 +1,0 @@
-type: mssql
-host: mssql-source
-port: 1433
-reader: reader

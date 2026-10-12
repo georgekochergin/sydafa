@@ -1,18 +1,16 @@
 """Менеджер контейнеров источников СУБД через Docker Python SDK."""
 from __future__ import annotations
 
-import io
 import logging
 import os
 import socket
-import tarfile
 import time
 from typing import Any
 
 import docker
 from docker.errors import NotFound
 
-from .constants import SOURCE_IMAGES, TEMPLATES_DIR
+from .constants import SOURCE_IMAGES
 from .models import SourceConfig
 from .sources import all_sources
 
@@ -58,19 +56,20 @@ def _wait_for_port(host: str, port: int, timeout: int = 120) -> None:
 
 
 def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
-    """Ожидает полной готовности СУБД к приёму авторизованных запросов суперпользователя sydafa."""
+    """Ожидает полной готовности СУБД к приёму авторизованных запросов суперпользователя."""
     deadline = time.time() + timeout
     last_err: Exception | None = None
 
     if config.type == "mssql":
         import pymssql
+        sa_password = os.environ.get("MSSQL_SA_PASSWORD", "AdminPassword1!")
         while time.time() < deadline:
             try:
                 conn = pymssql.connect(
                     server=config.host,
                     port=config.port,
-                    user="sydafa",
-                    password="sydafa",
+                    user="sa",
+                    password=sa_password,
                     database="master",
                     login_timeout=3,
                 )
@@ -83,12 +82,13 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
 
     elif config.type == "oracle":
         import oracledb
+        oracle_password = os.environ.get("ORACLE_PASSWORD", "admin")
         while time.time() < deadline:
             try:
                 dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
                 conn = oracledb.connect(
-                    user="sydafa",
-                    password="sydafa",
+                    user="SYS",
+                    password=oracle_password,
                     dsn=dsn,
                     mode=oracledb.AUTH_MODE_SYSDBA,
                 )
@@ -141,23 +141,6 @@ def ensure_source_container(source_name: str, config: SourceConfig) -> None:
                 "MSSQL_SA_PASSWORD": sa_password,
                 "MSSQL_PID": "Developer",
             }
-            # Автономный entrypoint без внешних монтирований
-            entrypoint = [
-                "/bin/bash",
-                "-c",
-                (
-                    "/opt/mssql/bin/sqlservr &\n"
-                    "pid=$!\n"
-                    "until /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' >/dev/null 2>&1; do sleep 1; done\n"
-                    "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -Q \"\n"
-                    "IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = 'sydafa')\n"
-                    "BEGIN\n"
-                    "    CREATE LOGIN sydafa WITH PASSWORD = 'sydafa', CHECK_POLICY = OFF;\n"
-                    "    ALTER SERVER ROLE sysadmin ADD MEMBER sydafa;\n"
-                    "END\"\n"
-                    "wait $pid\n"
-                ),
-            ]
 
             client.containers.run(
                 image=image_name,
@@ -166,44 +149,25 @@ def ensure_source_container(source_name: str, config: SourceConfig) -> None:
                 detach=True,
                 environment=environment,
                 ports=ports,
-                entrypoint=entrypoint,
-                command=command,
                 network=network_name,
                 labels=labels,
             )
 
         elif config.type == "oracle":
+            oracle_password = os.environ.get("ORACLE_PASSWORD", "admin")
             environment = {
-                "ORACLE_PASSWORD": "admin",
+                "ORACLE_PASSWORD": oracle_password,
             }
-            # Создаем контейнер Oracle
-            created_container = client.containers.create(
+            client.containers.run(
                 image=image_name,
                 name=container_name,
                 hostname=container_name,
+                detach=True,
                 environment=environment,
                 ports=ports,
                 network=network_name,
                 labels=labels,
             )
-
-            # Передаем встроенный скрипт инициализации sydafa/sydafa в каталог /container-entrypoint-initdb.d/
-            sql_script_path = TEMPLATES_DIR / "init" / "oracle" / "01-init-sydafa.sql"
-            if sql_script_path.exists():
-                logger.info("Инъекция скрипта инициализации %s в контейнер %s...", sql_script_path.name, container_name)
-                tar_stream = io.BytesIO()
-                with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-                    sql_data = sql_script_path.read_bytes()
-                    ti = tarfile.TarInfo(name="01-init-sydafa.sql")
-                    ti.size = len(sql_data)
-                    ti.mtime = int(time.time())
-                    ti.mode = 0o644
-                    tar.addfile(ti, io.BytesIO(sql_data))
-                tar_stream.seek(0)
-                created_container.put_archive("/container-entrypoint-initdb.d", tar_stream.getvalue())
-
-            # Запускаем созданный контейнер
-            created_container.start()
 
     # Ожидание доступности TCP порта внутри сети
     timeout = 180 if config.type == "oracle" else 90

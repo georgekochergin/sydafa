@@ -53,6 +53,16 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(len(data["tables"]), 1)
             self.assertEqual(data["tables"][0]["name"], "customers")
 
+    def test_exec_source_endpoint(self):
+        with patch("app.sources.source_names", return_value=["mssql"]), \
+             patch("app.exec_engine.execute_source_operations") as mock_exec:
+            mock_exec.return_value = MagicMock(status="ok", executed=1, applied=[{"op": "create_schema"}])
+            resp = self.client.post("/sources/mssql/exec", json={
+                "operations": [{"op": "create_schema", "name": "demo"}]
+            })
+            self.assertEqual(resp.status_code, 200)
+            mock_exec.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

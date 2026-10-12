@@ -12,7 +12,6 @@ SYDAFA_PASSWORD = "sydafa"
 # Пути к директориям конфигурации и состояния
 CONFIG_SOURCES_DIR = Path(os.environ.get("CONFIG_SOURCES_DIR", "/app/config/sources"))
 STATE_DIR = Path(os.environ.get("STATE_DIR", "/state"))
-TEMPLATES_DIR = Path(os.environ.get("TEMPLATES_DIR", Path(__file__).resolve().parent.parent / "templates"))
 
 # Внутренний реестр Docker-образов для СУБД источников
 SOURCE_IMAGES: dict[str, str] = {
