@@ -1,6 +1,6 @@
 """Unit-тесты генератора Airflow DAG-ов sydafa."""
 import unittest
-from app.dag_generator import generate_ods_dags
+from integrations.airflow.dag_generator import generate_ods_dags
 
 
 class TestDagGenerator(unittest.TestCase):

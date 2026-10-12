@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import schema_state, sources
+from app import schema_state, sources
 
 logger = logging.getLogger("sydafa.dag_generator")
 

@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY templates ./templates
+COPY integrations ./integrations
 COPY tests ./tests
 RUN python -m unittest discover -s tests
 

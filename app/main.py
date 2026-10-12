@@ -11,7 +11,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import TypeAdapter
 
-from . import container_manager, dag_generator, exec_engine, generators, provisioning, schema_engine, schema_state, sources
+from integrations.airflow import dag_generator
+from . import container_manager, exec_engine, generators, provisioning, schema_engine, schema_state, sources
 from .constants import SYDAFA_DB
 from .exec_engine import ExecError
 from .generators import GeneratorError, PredicateError
