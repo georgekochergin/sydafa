@@ -214,6 +214,20 @@ docker rm -f mssql-source oracle-source >/dev/null 2>&1 || true
 
 ---
 
+## Поддерживаемые типы данных (маппинг в СУБД)
+
+При объявлении колонок в таблицах используются логические типы, транслируемые в диалекты СУБД:
+
+| Логический тип | MSSQL DDL | Oracle DDL | Spark/Iceberg тип |
+|---|---|---|---|
+| `bigint` | `BIGINT` | `NUMBER(19)` | `long` |
+| `string` | `NVARCHAR(400)` | `VARCHAR2(400)` | `string` |
+| `decimal(p,s)` | `DECIMAL(p,s)` | `NUMBER(p,s)` | `decimal(p,s)` |
+| `date` | `DATE` | `DATE` | `date` |
+| `timestamp` | `DATETIME2` | `TIMESTAMP` | `timestamp` |
+
+---
+
 ## Тестирование сервиса
 
 Репозиторий `sydafa` поддерживает два уровня тестирования:
