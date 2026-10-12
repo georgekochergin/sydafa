@@ -53,13 +53,6 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(len(data["tables"]), 1)
             self.assertEqual(data["tables"][0]["name"], "customers")
 
-    def test_get_airflow_dags_endpoint(self):
-        with patch("app.sources.source_names", return_value=[]):
-            resp = self.client.get("/integrations/airflow/dags")
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json()
-            self.assertIn("dags", data)
-
     def test_exec_source_endpoint(self):
         with patch("app.sources.source_names", return_value=["mssql"]), \
              patch("app.exec_engine.execute_source_operations") as mock_exec:

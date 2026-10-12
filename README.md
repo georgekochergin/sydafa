@@ -20,7 +20,6 @@
   - `append`: генерация N строк с учетом внешних ключей и типизированных генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`).
   - `update`: параметризованное точечное обновление данных с предикатами.
   - `delete`: удаление строк с проверкой ссылочной целостности или каскадным удалением зависимостей.
-- **Модуль интеграции с Airflow (`integrations/airflow`)**: встроенный генератор (`GET /integrations/airflow/dags` и CLI `python -m integrations.airflow.dag_generator`), создающий ODS DAG-и для каждой схемы каждого источника из `init.json` (по умолчанию выключены, `is_paused_upon_creation=True`).
 
 ---
 
@@ -149,7 +148,6 @@ docker rm -f mssql-source oracle-source >/dev/null 2>&1 || true
 | GET | `/sources/{source}/schema` | Текущая live-схема источника (JSON) | — |
 | GET | `/tables/{source}/{schema}/{table}` | Текущая спецификация таблицы и список колонок | — |
 | POST | `/sources/{source}/exec` | Единый метод транзакционного выполнения DDL + DML операций | `{"operations": [...]}` |
-| GET | `/integrations/airflow/dags` | Экспорт сгенерированных ODS демо-DAG-ов для Airflow | — |
 
 ---
 

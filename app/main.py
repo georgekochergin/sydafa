@@ -11,7 +11,6 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import TypeAdapter
 
-from integrations.airflow import dag_generator
 from . import container_manager, exec_engine, generators, provisioning, schema_engine, schema_state, sources
 from .constants import SYDAFA_DB
 from .exec_engine import ExecError
@@ -181,23 +180,6 @@ def get_table_schema(source: str, schema: str, table: str):
     """Спецификация конкретной таблицы источника."""
     _, tbl = _resolve_table(source, schema, table)
     return tbl.model_dump(by_alias=True)
-
-
-# --- Интеграции (Airflow DAG Generator) ---
-
-@app.get("/integrations/airflow/dags")
-def get_generated_airflow_dags():
-    """Возвращает сгенерированные Airflow ODS DAG-и для каждой схемы каждого источника."""
-    init_file = _find_init_file()
-    init_content = None
-    if init_file and init_file.is_file():
-        try:
-            init_content = json.loads(init_file.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.error("Ошибка чтения init_file: %s", e)
-
-    dags = dag_generator.generate_ods_dags(init_content)
-    return {"dags": dags}
 
 
 # --- Единый метод выполнения операций DDL + DML (POST /sources/{source}/exec) ---
