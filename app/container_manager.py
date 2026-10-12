@@ -57,6 +57,45 @@ def _wait_for_port(host: str, port: int, timeout: int = 120) -> None:
     raise TimeoutError(f"Таймаут ожидания порта {host}:{port} ({timeout}s)")
 
 
+def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
+    """Ожидает полной готовности СУБД к приёму авторизованных запросов суперпользователя sydafa."""
+    deadline = time.time() + timeout
+    last_err: Exception | None = None
+
+    if config.type == "mssql":
+        import pyodbc
+        from .db_connectors import MSSQL_DRIVER
+        driver = MSSQL_DRIVER or "ODBC Driver 18 for SQL Server"
+        conn_str = f"DRIVER={{{driver}}};SERVER={config.host},{config.port};UID=sydafa;PWD=sydafa;Database=master;TrustServerCertificate=yes;"
+        while time.time() < deadline:
+            try:
+                conn = pyodbc.connect(conn_str, timeout=3)
+                conn.close()
+                return
+            except Exception as e:
+                last_err = e
+                time.sleep(2)
+        raise TimeoutError(f"Таймаут ожидания готовности MSSQL {config.host}:{config.port}: {last_err}")
+
+    elif config.type == "oracle":
+        import oracledb
+        while time.time() < deadline:
+            try:
+                dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
+                conn = oracledb.connect(
+                    user="sydafa",
+                    password="sydafa",
+                    dsn=dsn,
+                    mode=oracledb.AUTH_MODE_SYSDBA,
+                )
+                conn.close()
+                return
+            except Exception as e:
+                last_err = e
+                time.sleep(2)
+        raise TimeoutError(f"Таймаут ожидания готовности Oracle CDB {config.host}:{config.port}/FREE: {last_err}")
+
+
 def ensure_source_container(source_name: str, config: SourceConfig) -> None:
     """Гарантирует, что контейнер источника создан, запущен и доступен по сети."""
     client = _get_docker_client()
@@ -166,7 +205,11 @@ def ensure_source_container(source_name: str, config: SourceConfig) -> None:
     timeout = 180 if config.type == "oracle" else 90
     logger.info("Ожидание доступности порта %s:%s...", config.host, config.port)
     _wait_for_port(config.host, config.port, timeout=timeout)
-    logger.info("Источник %s (%s:%s) готов к приёму соединений.", source_name, config.host, config.port)
+
+    # Ожидание полной готовности СУБД к подключениям
+    logger.info("Ожидание готовности СУБД источника %s (%s)...", source_name, config.type)
+    _wait_for_db_ready(config, timeout=timeout)
+    logger.info("Источник %s (%s:%s) полностью готов к приёму соединений.", source_name, config.host, config.port)
 
 
 def ensure_all_source_containers() -> None:
