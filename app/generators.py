@@ -133,6 +133,15 @@ def _mint_new_row(
     return {pk: values[pk] for pk in table.primary_key}
 
 
+def append_rows_conn(
+    conn: Any, source: str, dialect: str, live: LiveSchema, schema: str, table_name: str, rows: int, new_key_ratio: float
+) -> int:
+    table = _find_table(live, schema, table_name)
+    for _ in range(rows):
+        _mint_new_row(conn, source, dialect, live, table, new_key_ratio)
+    return rows
+
+
 def append_rows(source: str, live: LiveSchema, schema: str, table_name: str, rows: int, new_key_ratio: float) -> int:
     table = _find_table(live, schema, table_name)
     cfg = get_source(source)
@@ -140,10 +149,9 @@ def append_rows(source: str, live: LiveSchema, schema: str, table_name: str, row
 
     from .db_connectors import get_connection
     with get_connection(source) as conn:
-        for _ in range(rows):
-            _mint_new_row(conn, source, dialect, live, table, new_key_ratio)
+        res = append_rows_conn(conn, source, dialect, live, schema, table_name, rows, new_key_ratio)
         conn.commit()
-    return rows
+    return res
 
 
 def _validate_column(table: TableSchema, column: str) -> None:
@@ -170,37 +178,40 @@ def _build_where(
     return " AND ".join(clauses), params
 
 
-def update_rows(
-    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any]
+def update_rows_conn(
+    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any]
 ) -> int:
     table = _find_table(live, schema, table_name)
-    cfg = get_source(source)
-    dialect = cfg.type
     qualified = _qualify(dialect, table.schema_, table.name)
     _validate_set(table, set_values)
 
+    set_cols = list(set_values.keys())
+    assignments = ", ".join(
+        f"{f'[{col}]' if dialect == 'mssql' else col} = {_placeholder(dialect, i)}"
+        for i, col in enumerate(set_cols, start=1)
+    )
+    where, where_params = _build_where(table, conditions, dialect, start_index=len(set_cols) + 1)
+    params = list(set_values.values()) + where_params
+    cur = conn.cursor()
+    cur.execute(f"UPDATE {qualified} SET {assignments} WHERE {where}", params)
+    return cur.rowcount if cur.rowcount != -1 else len(params)
+
+
+def update_rows(
+    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any]
+) -> int:
+    cfg = get_source(source)
     from .db_connectors import get_connection
     with get_connection(source) as conn:
-        set_cols = list(set_values.keys())
-        assignments = ", ".join(
-            f"{f'[{col}]' if dialect == 'mssql' else col} = {_placeholder(dialect, i)}"
-            for i, col in enumerate(set_cols, start=1)
-        )
-        where, where_params = _build_where(table, conditions, dialect, start_index=len(set_cols) + 1)
-        params = list(set_values.values()) + where_params
-        cur = conn.cursor()
-        cur.execute(f"UPDATE {qualified} SET {assignments} WHERE {where}", params)
-        updated = cur.rowcount if cur.rowcount != -1 else len(params)
+        updated = update_rows_conn(conn, cfg.type, live, schema, table_name, conditions, set_values)
         conn.commit()
         return updated
 
 
-def delete_rows(
-    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool
+def delete_rows_conn(
+    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool
 ) -> int:
     table = _find_table(live, schema, table_name)
-    cfg = get_source(source)
-    dialect = cfg.type
     qualified = _qualify(dialect, table.schema_, table.name)
 
     dependents = [
@@ -208,32 +219,71 @@ def delete_rows(
         if fk.ref_table == table.name and (fk.ref_schema or t.schema_) == table.schema_
     ]
     where, where_params = _build_where(table, conditions, dialect)
+    cur = conn.cursor()
+    if dependents:
+        pk_cols = ", ".join(f"[{c}]" if dialect == "mssql" else f"{c}" for c in table.primary_key)
+        cur.execute(f"SELECT {pk_cols} FROM {qualified} WHERE {where}", where_params)
+        target_pks = cur.fetchall()
+        if target_pks:
+            if not cascade:
+                raise GeneratorError(
+                    f"На таблицу '{table.schema_}.{table.name}' ссылаются {[t.name for t, _ in dependents]}; "
+                    "удаление заблокировано без cascade=true"
+                )
+            for dep_table, fk in dependents:
+                dep_qualified = _qualify(dialect, dep_table.schema_, dep_table.name)
+                ref_idx = {c: i for i, c in enumerate(table.primary_key)}
+                for pk_row in target_pks:
+                    dep_where = " AND ".join(
+                        f"{f'[{fk_col}]' if dialect == 'mssql' else fk_col} = {_placeholder(dialect, i)}"
+                        for i, fk_col in enumerate(fk.columns, start=1)
+                    )
+                    values = [pk_row[ref_idx[rc]] for rc in fk.ref_columns]
+                    cur.execute(f"DELETE FROM {dep_qualified} WHERE {dep_where}", values)
 
+    cur.execute(f"DELETE FROM {qualified} WHERE {where}", where_params)
+    return cur.rowcount
+
+
+def delete_rows(
+    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool
+) -> int:
+    cfg = get_source(source)
     from .db_connectors import get_connection
     with get_connection(source) as conn:
-        cur = conn.cursor()
-        if dependents:
-            pk_cols = ", ".join(f"[{c}]" if dialect == "mssql" else f"{c}" for c in table.primary_key)
-            cur.execute(f"SELECT {pk_cols} FROM {qualified} WHERE {where}", where_params)
-            target_pks = cur.fetchall()
-            if target_pks:
-                if not cascade:
-                    raise GeneratorError(
-                        f"На таблицу '{table.schema_}.{table.name}' ссылаются {[t.name for t, _ in dependents]}; "
-                        "удаление заблокировано без cascade=true"
-                    )
-                for dep_table, fk in dependents:
-                    dep_qualified = _qualify(dialect, dep_table.schema_, dep_table.name)
-                    ref_idx = {c: i for i, c in enumerate(table.primary_key)}
-                    for pk_row in target_pks:
-                        dep_where = " AND ".join(
-                            f"{f'[{fk_col}]' if dialect == 'mssql' else fk_col} = {_placeholder(dialect, i)}"
-                            for i, fk_col in enumerate(fk.columns, start=1)
-                        )
-                        values = [pk_row[ref_idx[rc]] for rc in fk.ref_columns]
-                        cur.execute(f"DELETE FROM {dep_qualified} WHERE {dep_where}", values)
-
-        cur.execute(f"DELETE FROM {qualified} WHERE {where}", where_params)
-        deleted = cur.rowcount
+        deleted = delete_rows_conn(conn, cfg.type, live, schema, table_name, conditions, cascade)
         conn.commit()
         return deleted
+
+
+def truncate_table_conn(
+    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, cascade: bool = False
+) -> int:
+    table = _find_table(live, schema, table_name)
+    qualified = _qualify(dialect, table.schema_, table.name)
+    dependents = [
+        t for t in live.tables.values()
+        if t != table and any(fk.ref_table == table.name and (fk.ref_schema or t.schema_) == table.schema_ for fk in t.foreign_keys)
+    ]
+    cur = conn.cursor()
+    if dependents:
+        if not cascade:
+            for dep in dependents:
+                dep_q = _qualify(dialect, dep.schema_, dep.name)
+                cur.execute(f"SELECT COUNT(*) FROM {dep_q}")
+                row = cur.fetchone()
+                cnt = row[0] if row else 0
+                if cnt > 0:
+                    raise GeneratorError(
+                        f"На таблицу '{table.schema_}.{table.name}' ссылается '{dep.schema_}.{dep.name}' с {cnt} строками; "
+                        "truncate заблокирован без cascade=true"
+                    )
+        else:
+            for dep in dependents:
+                truncate_table_conn(conn, dialect, live, dep.schema_, dep.name, cascade=True)
+
+    if dependents:
+        cur.execute(f"DELETE FROM {qualified}")
+    else:
+        cur.execute(f"TRUNCATE TABLE {qualified}")
+    return 1

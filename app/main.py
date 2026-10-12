@@ -1,20 +1,28 @@
 """sydafa — фабрика синтетических данных и оркестратор источников данных КХД."""
 from __future__ import annotations
 
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response, status
+from pydantic import TypeAdapter
 
-from . import container_manager, generators, provisioning, schema_engine, schema_state, sources
+from . import container_manager, dag_generator, exec_engine, generators, provisioning, schema_engine, schema_state, sources
 from .constants import SYDAFA_DB
+from .exec_engine import ExecError
 from .generators import GeneratorError, PredicateError
 from .models import (
     AppendRequest,
     DeleteRequest,
     EvolveRequest,
     EvolveResult,
+    ExecOperation,
+    ExecRequest,
+    ExecResult,
     SourceInfo,
     TableRef,
     UpdateRequest,
@@ -25,6 +33,53 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("sydafa.main")
 
 _is_ready = False
+
+
+def _find_init_file() -> Path | None:
+    env_path = os.environ.get("SYDAFA_INIT_FILE")
+    if env_path and Path(env_path).is_file():
+        return Path(env_path)
+    candidates = [
+        Path("/app/config/init.json"),
+        Path("config/init.json"),
+        Path("sydafa/init.json"),
+        Path(__file__).parent.parent / "config" / "init.json",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+def _apply_init_file() -> None:
+    init_path = _find_init_file()
+    if not init_path:
+        logger.info("Init-файл не обнаружен, рабочие базы созданы пустыми.")
+        return
+
+    logger.info("Обнаружен init-файл: %s. Применение исходной структуры...", init_path)
+    try:
+        content = json.loads(init_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error("Ошибка чтения init-файла %s: %s", init_path, e)
+        return
+
+    sources_dict = content.get("sources", content) if isinstance(content, dict) else {}
+    adapter = TypeAdapter(list[ExecOperation])
+
+    for src in sources.source_names():
+        if src in sources_dict and isinstance(sources_dict[src], list):
+            raw_ops = sources_dict[src]
+            if not raw_ops:
+                continue
+            try:
+                ops = adapter.validate_python(raw_ops)
+                res = exec_engine.execute_source_operations(src, ops)
+                logger.info("Источник '%s': успешно выполнено %d операций из init-файла", src, res.executed)
+            except Exception as e:
+                logger.error("Ошибка применения init-файла для источника '%s': %s", src, e, exc_info=True)
+        else:
+            logger.info("Источник '%s' отсутствует в init-файле, оставляем чистую базу.", src)
 
 
 @asynccontextmanager
@@ -38,6 +93,8 @@ async def lifespan(app: FastAPI):
         container_manager.ensure_all_source_containers()
         # 3. Provisioning чистой базы sydafa и пользователя reader
         provisioning.provision_all_sources()
+        # 4. Применение init-файла (если присутствует)
+        _apply_init_file()
         _is_ready = True
         logger.info("sydafa успешно запущена и готова к работе.")
     except Exception as e:
@@ -123,6 +180,44 @@ def get_table_schema(source: str, schema: str, table: str):
     """Спецификация конкретной таблицы источника."""
     _, tbl = _resolve_table(source, schema, table)
     return tbl.model_dump(by_alias=True)
+
+
+# --- Интеграции (Airflow DAG Generator) ---
+
+@app.get("/integrations/airflow/dags")
+def get_generated_airflow_dags():
+    """Возвращает сгенерированные Airflow ODS DAG-и для каждой схемы каждого источника."""
+    init_file = _find_init_file()
+    init_content = None
+    if init_file and init_file.is_file():
+        try:
+            init_content = json.loads(init_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.error("Ошибка чтения init_file: %s", e)
+
+    dags = dag_generator.generate_ods_dags(init_content)
+    return {"dags": dags}
+
+
+# --- Единый метод выполнения операций DDL + DML (POST /sources/{source}/exec) ---
+
+@app.post("/sources/{source}/exec", response_model=ExecResult)
+def exec_source(source: str, req: ExecRequest):
+    """Единый метод исполнения транзакционных операций DDL и DML (All-or-Nothing).
+
+    Поддерживает:
+    - DDL: create_schema, create_table, add_column, rename_column, drop_column, rename_table, drop_table, transfer_table
+    - DML: truncate, append, update, delete
+    """
+    _assert_source(source)
+    try:
+        return exec_engine.execute_source_operations(source, req.operations)
+    except ExecError as exc:
+        code = status.HTTP_409_CONFLICT if exc.is_conflict else status.HTTP_422_UNPROCESSABLE_ENTITY
+        raise HTTPException(code, str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Непредвиденная ошибка при /sources/%s/exec: %s", source, exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка выполнения exec: {exc}") from exc
 
 
 # --- Эволюция схемы (DDL) ---

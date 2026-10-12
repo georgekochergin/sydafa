@@ -286,6 +286,96 @@ class Condition(BaseModel):
     value: Any
 
 
+class TruncateOp(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    op: Literal["truncate"] = "truncate"
+    schema_: str = Field(alias="schema")
+    table: str
+    cascade: bool = False
+
+    @field_validator("schema_", "table")
+    @classmethod
+    def check_names(cls, v: str) -> str:
+        return validate_identifier(v)
+
+
+class AppendOp(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    op: Literal["append"] = "append"
+    schema_: str = Field(alias="schema")
+    table: str
+    rows: int = Field(default=1, gt=0, le=100_000)
+    new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @field_validator("schema_", "table")
+    @classmethod
+    def check_names(cls, v: str) -> str:
+        return validate_identifier(v)
+
+
+class UpdateOp(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    op: Literal["update"] = "update"
+    schema_: str = Field(alias="schema")
+    table: str
+    predicate: list[Condition]
+    set: dict[str, Any]
+
+    @field_validator("schema_", "table")
+    @classmethod
+    def check_names(cls, v: str) -> str:
+        return validate_identifier(v)
+
+
+class DeleteOp(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    op: Literal["delete"] = "delete"
+    schema_: str = Field(alias="schema")
+    table: str
+    predicate: list[Condition]
+    cascade: bool = False
+
+    @field_validator("schema_", "table")
+    @classmethod
+    def check_names(cls, v: str) -> str:
+        return validate_identifier(v)
+
+
+ExecOperation = Annotated[
+    Union[
+        CreateSchemaOp,
+        DropSchemaOp,
+        RenameSchemaOp,
+        CreateTableOp,
+        DropTableOp,
+        RenameTableOp,
+        TransferTableOp,
+        AddColumnOp,
+        DropColumnOp,
+        RenameColumnOp,
+        TruncateOp,
+        AppendOp,
+        UpdateOp,
+        DeleteOp,
+    ],
+    Field(discriminator="op"),
+]
+
+
+class ExecRequest(BaseModel):
+    operations: list[ExecOperation]
+
+
+class ExecResult(BaseModel):
+    status: str = "ok"
+    executed: int
+    applied: list[dict[str, Any]]
+
+
 class AppendRequest(BaseModel):
     rows: int = Field(gt=0, le=100_000)
     new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
