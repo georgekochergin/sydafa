@@ -1,0 +1,4 @@
+type: oracle
+host: oracle-source
+port: 1521
+reader: reader
