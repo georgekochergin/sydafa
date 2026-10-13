@@ -10,16 +10,16 @@ from app.models import SourceConfig
 
 class TestContainerNames(unittest.TestCase):
     def test_default_names(self):
-        cfg = SourceConfig(type="mssql", host="mssql-source", port=1433)
+        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
         with patch("app.container_manager.CONTAINER_PREFIX", ""):
-            self.assertEqual(container_name_for(cfg), "mssql-source")
-            self.assertEqual(volume_name_for("mssql"), "mssql-data")
+            self.assertEqual(container_name_for(cfg), "sydafa-mssql-billing-source")
+            self.assertEqual(volume_name_for(cfg), "sydafa-mssql-billing-data")
 
     def test_prefixed_names(self):
-        cfg = SourceConfig(type="mssql", host="mssql-source", port=1433)
+        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
         with patch("app.container_manager.CONTAINER_PREFIX", "sydafa-test-"):
-            self.assertEqual(container_name_for(cfg), "sydafa-test-mssql-source")
-            self.assertEqual(volume_name_for("mssql"), "sydafa-test-mssql-data")
+            self.assertEqual(container_name_for(cfg), "sydafa-test-mssql-billing-source")
+            self.assertEqual(volume_name_for(cfg), "sydafa-test-mssql-billing-data")
 
 
 if __name__ == "__main__":

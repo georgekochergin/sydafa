@@ -32,11 +32,37 @@ class TestInitApply(unittest.TestCase):
             },
         )
         with patch("app.init_apply.get_live_schema", return_value=live), \
-             patch("app.init_apply.load_init_ops") as load, \
+             patch("app.init_apply.load_init_ops", return_value={"mssql": {"type": "mssql", "operations": [{"op": "create_schema", "name": "demo"}, {"op": "create_table", "schema": "demo", "name": "t"}]}}), \
              patch("app.exec_engine.execute_source_operations") as exe:
             apply_init_for_source("mssql")
-            load.assert_not_called()
             exe.assert_not_called()
+
+    def test_additive_seed_delta(self):
+        live = LiveSchema(
+            schemas=["demo"],
+            tables={
+                "demo.t": TableSchema(
+                    name="t",
+                    schema="demo",
+                    primary_key=["id"],
+                    columns=[ColumnSpec(name="id", type="bigint")],
+                )
+            },
+        )
+        ops = [
+            {"op": "create_schema", "name": "demo"},
+            {"op": "create_table", "schema": "demo", "name": "t", "primary_key": ["id"], "columns": [{"name": "id", "type": "bigint"}]},
+            {"op": "create_table", "schema": "demo", "name": "new_t", "primary_key": ["id"], "columns": [{"name": "id", "type": "bigint"}]},
+        ]
+        with patch("app.init_apply.get_live_schema", return_value=live), \
+             patch("app.init_apply.load_init_ops", return_value={"mssql": {"type": "mssql", "operations": ops}}), \
+             patch("app.exec_engine.execute_source_operations") as exe:
+            exe.return_value.executed = 1
+            apply_init_for_source("mssql")
+            exe.assert_called_once()
+            applied_ops = exe.call_args[0][1]
+            self.assertEqual(len(applied_ops), 1)
+            self.assertEqual(applied_ops[0].name, "new_t")
 
     def test_apply_when_empty(self):
         with patch("app.init_apply.get_live_schema", return_value=LiveSchema()), \

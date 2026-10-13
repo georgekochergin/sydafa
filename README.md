@@ -51,25 +51,38 @@ stateDiagram-v2
 ```json
 {
   "sources": {
-    "mssql": [
-      {"op": "create_schema", "name": "demo"},
-      {
-        "op": "create_table",
-        "schema": "demo",
-        "name": "customers",
-        "primary_key": ["customer_id"],
-        "columns": [
-          {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
-          {"name": "name", "type": "string", "generator": {"kind": "faker", "provider": "company"}}
-        ]
-      }
-    ]
+    "billing": {
+      "type": "mssql",
+      "operations": [
+        {"op": "create_schema", "name": "demo"},
+        {
+          "op": "create_table",
+          "schema": "demo",
+          "name": "customers",
+          "primary_key": ["customer_id"],
+          "columns": [
+            {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
+            {"name": "name", "type": "string", "generator": {"kind": "faker", "provider": "company"}}
+          ]
+        }
+      ]
+    },
+    "crm": {
+      "type": "oracle",
+      "operations": []
+    }
   }
 }
 ```
-- Если для источника передан пустой список операций (`"mssql": []`), `sydafa` разворачивает чистую рабочую базу `sydafa` без создания демо-таблиц.
-- Файлы конфигурации источников на диске больше не требуются — сервис автоматически регистрирует базы по ключам `init.json`.
-- Внутренние имена хостов в Docker-сети: **`sydafa-mssql-source`** (порт `1433`) и **`sydafa-oracle-source`** (порт `1521`).
+- Ключом источника является **произвольное уникальное имя инстанса** (`billing`, `crm`, `erp` и т.д.), что позволяет запускать любое количество инстансов одного типа.
+- Если для источника передан пустой список операций (`"operations": []`), `sydafa` разворачивает чистую рабочую базу `sydafa` без создания таблиц.
+- Внутренние имена хостов в Docker-сети формируются строго по маске: **`sydafa-<тип>-<имя>-source`** (например, `sydafa-mssql-billing-source`, `sydafa-oracle-crm-source`).
+- Стандартные внутренние порты СУБД: MSSQL = `1433`, Oracle = `1521`. Внутри Docker-сети каждый контейнер изолирован и имеет собственный IP, поэтому одинаковый внутренний порт у разных инстансов — норма и стандарт.
+
+### Аддитивный Seed без потери данных
+- `init.json` работает как **стартовый набор (Seed)** при рождении базы.
+- При перезапусках `sydafa` сопоставляет операции с текущей `live_schema`: если таблица уже есть — она пропускается без ошибок, если в `init.json` добавилась новая таблица — она автоматически создается.
+- Удаление таблиц из `init.json` **никогда не приводит к DROP TABLE**. Данные в постоянных томах сохраняются. Для сброса баз «с чистого листа» используется `docker compose down -v`.
 
 ---
 
@@ -82,8 +95,9 @@ services:
     environment:
       - SYDAFA_MAX_TTL_MINUTES=30
       - SYDAFA_TTL_MINUTES=15
-      # Открыть порт 14330 на хосте для подключения DBeaver с ноутбука:
-      - SYDAFA_EXT_PORT_MSSQL=14330
+      # Открыть внешние порты на хосте для подключения DBeaver (по имени инстанса):
+      - SYDAFA_EXT_PORT_BILLING=14330
+      - SYDAFA_EXT_PORT_CRM=15211
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./conf/sydafa/init.json:/app/config/init.json:ro
@@ -97,9 +111,9 @@ volumes:
   sydafa_state:
 ```
 
-### Назначение внешних портов (`SYDAFA_EXT_PORT_<SOURCE>`)
-- Внутри Docker-сети сервисы стенда (Spark, Airflow) обращаются к стандартным портам СУБД (`sydafa-mssql-source:1433`).
-- Переменная `SYDAFA_EXT_PORT_MSSQL=14330` указывает сервису `sydafa` опубликовать внешний порт на хост-машине (ноутбуке), чтобы к базе мог подключиться DBeaver. Если переменная не задана, порт наружу не публикуется.
+### Назначение внешних портов (`SYDAFA_EXT_PORT_<NAME>`)
+- Внутри Docker-сети сервисы стенда (Spark, Airflow) обращаются к стандартным внутренним портам СУБД (`sydafa-mssql-billing-source:1433`, `sydafa-oracle-crm-source:1521`).
+- Переменная `SYDAFA_EXT_PORT_<NAME>` публикует внешний порт на хост-машине (ноутбуке), чтобы к конкретной базе мог подключиться DBeaver. Если переменная для инстанса не задана, внешний порт не открывается.
 
 ---
 
@@ -107,8 +121,8 @@ volumes:
 
 ### 1. Подключение ETL (Spark, Airflow внутри Docker-сети)
 Spark и Airflow подключаются к СУБД напрямую во внутренней сети:
-- **MSSQL**: Host `sydafa-mssql-source`, Port `1433`, Database `sydafa`, User `sydafa`, Password `sydafa`.
-- **Oracle**: Host `sydafa-oracle-source`, Port `1521`, Service Name `sydafa`, User `sydafa`, Password `sydafa`.
+- **MSSQL**: Host `sydafa-mssql-billing-source`, Port `1433`, Database `sydafa`, User `sydafa`, Password `sydafa`.
+- **Oracle**: Host `sydafa-oracle-crm-source`, Port `1521`, Service Name `sydafa`, User `sydafa`, Password `sydafa`.
 
 Перед началом объемной выгрузки пайплайн может вызвать `POST /sources/mssql/activate?ttl_minutes=20`, гарантируя бодрствование базы на все время выполнения задачи.
 
@@ -146,21 +160,27 @@ Spark и Airflow подключаются к СУБД напрямую во вн
 
 Интерактивная документация Swagger UI доступна по адресу: `http://localhost:<порт-sydafa>/docs`.
 
-### Жизненный цикл источника
+### 1. Оркестрация источников (Orchestration API)
+| Метод | Путь | Назначение |
+| :--- | :--- | :--- |
+| `GET` | `/sources` | Список зарегистрированных источников |
+| `POST` | `/sources` | Динамическая регистрация нового инстанса `{"name": "billing", "type": "mssql"}` |
+| `DELETE` | `/sources/{source}` | Остановка контейнера и удаление инстанса |
+
+### 2. Жизненный цикл инстанса (Lifecycle API)
 | Метод | Путь | Назначение |
 | :--- | :--- | :--- |
 | `GET` | `/sources/{source}/status` | Текущий статус, срок TTL и реквизиты подключения `connection` |
 | `POST` | `/sources/{source}/activate?ttl_minutes=15` | Пробуждение базы и продление TTL (лимит до 30 мин) |
 | `POST` | `/sources/{source}/deactivate` | Принудительная остановка базы для освобождения RAM |
 
-### Управление данными и схемой
+### 3. Данные и схемы (Data & Schema API)
 | Метод | Путь | Назначение |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Готовность сервиса sydafa |
-| `GET` | `/sources` | Список зарегистрированных источников |
 | `GET` | `/sources/{source}` | Метаданные источника, схемы, таблицы и connection |
 | `GET` | `/sources/{source}/schema` | Текущая live-схема в JSON |
-| `POST` | `/sources/{source}/exec` | Единый транзакционный метод DDL + DML |
+| `POST` | `/sources/{source}/exec` | Единый транзакционный метод DDL + DML (All-or-Nothing) |
 
 ---
 

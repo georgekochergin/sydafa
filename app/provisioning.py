@@ -30,22 +30,17 @@ def _sydafa_ready_oracle(source_name: str) -> bool:
 
 
 def _ensure_mssql_reader(source_name: str, reader_user: str = READER_USER) -> None:
-    users_to_create = {reader_user: reader_user}
-    if reader_user == READER_USER:
-        users_to_create["reader"] = "reader"
-
     with mssql_connection(source_name=source_name, database=SYDAFA_DB, autocommit=True) as conn:
         cur = conn.cursor()
-        for u, p in users_to_create.items():
-            cur.execute(
-                f"IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '{u}') "
-                f"CREATE LOGIN [{u}] WITH PASSWORD = '{p}', CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF"
-            )
-            cur.execute(
-                f"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '{u}') "
-                f"CREATE USER [{u}] FOR LOGIN [{u}]"
-            )
-            cur.execute(f"ALTER ROLE db_datareader ADD MEMBER [{u}]")
+        cur.execute(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '{reader_user}') "
+            f"CREATE LOGIN [{reader_user}] WITH PASSWORD = '{reader_user}', CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF"
+        )
+        cur.execute(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '{reader_user}') "
+            f"CREATE USER [{reader_user}] FOR LOGIN [{reader_user}]"
+        )
+        cur.execute(f"ALTER ROLE db_datareader ADD MEMBER [{reader_user}]")
 
 
 def provision_mssql(source_name: str, config: SourceConfig) -> None:
@@ -108,26 +103,20 @@ def provision_mssql(source_name: str, config: SourceConfig) -> None:
 
 
 def _ensure_oracle_reader(source_name: str, reader_user: str = READER_USER) -> None:
-    import time
-    users_to_create = [reader_user]
-    if reader_user != "reader" and "reader" not in users_to_create:
-        users_to_create.append("reader")
-
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
             with oracle_connection(source_name=source_name, service_name=SYDAFA_DB) as conn:
                 cur = conn.cursor()
-                for u in users_to_create:
-                    cur.execute(f"SELECT username FROM all_users WHERE UPPER(username) = UPPER('{u}')")
-                    if not cur.fetchone():
-                        cur.execute(f'CREATE USER {u} IDENTIFIED BY "{u}"')
-                    cur.execute(f"GRANT CREATE SESSION TO {u}")
-                    cur.execute(f"GRANT SELECT ANY TABLE TO {u}")
+                cur.execute(f"SELECT username FROM all_users WHERE UPPER(username) = UPPER('{reader_user}')")
+                if not cur.fetchone():
+                    cur.execute(f'CREATE USER {reader_user} IDENTIFIED BY "{reader_user}"')
+                cur.execute(f"GRANT CREATE SESSION TO {reader_user}")
+                cur.execute(f"GRANT SELECT ANY TABLE TO {reader_user}")
                 return
         except Exception:
             time.sleep(2)
-    raise TimeoutError(f"Не удалось настроить reader пользователей в Oracle {SYDAFA_DB}")
+    raise TimeoutError(f"Не удалось настроить пользователя {reader_user} в Oracle {SYDAFA_DB}")
 
 
 def provision_oracle(source_name: str, config: SourceConfig) -> None:

@@ -44,8 +44,9 @@ def container_name_for(config: SourceConfig) -> str:
     return config.host
 
 
-def volume_name_for(source_name: str) -> str:
-    return f"{CONTAINER_PREFIX}{source_name}-data"
+def volume_name_for(config: SourceConfig) -> str:
+    prefix = CONTAINER_PREFIX or "sydafa-"
+    return f"{prefix}{config.type}-{config.name}-data"
 
 
 def _get_docker_client() -> docker.DockerClient:
@@ -192,7 +193,7 @@ def _run_container(
 
     network_name, project_name = _get_context(client)
     name = container_name_for(config)
-    volume_name = volume_name_for(source_name)
+    volume_name = volume_name_for(config)
     data_path = DATA_VOLUME_PATHS[config.type]
     _ensure_volume(client, volume_name)
 

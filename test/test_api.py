@@ -129,6 +129,24 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["state"], "idle")
 
+    def test_create_and_delete_source(self):
+        with patch("app.sources.source_names", return_value=[]), \
+             patch("app.sources.register_source") as mock_reg, \
+             patch("app.sources.remove_source") as mock_rem, \
+             patch("app.container_manager.deactivate"):
+            mock_reg.return_value = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
+            resp = self.client.post("/sources", json={"name": "billing", "type": "mssql"})
+            self.assertEqual(resp.status_code, 201)
+            self.assertEqual(resp.json()["source"], "billing")
+            mock_reg.assert_called_once_with("billing", "mssql", None)
+
+        with patch("app.sources.source_names", return_value=["billing"]), \
+             patch("app.sources.remove_source") as mock_rem, \
+             patch("app.container_manager.deactivate"):
+            resp = self.client.delete("/sources/billing")
+            self.assertEqual(resp.status_code, 200)
+            mock_rem.assert_called_once_with("billing")
+
 
 if __name__ == "__main__":
     unittest.main()

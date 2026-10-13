@@ -12,9 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class SourceConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    name: str = ""
     type: Literal["mssql", "oracle"]
     host: str = ""
-    port: int | None = None
+    port: int = 1433
     external_port: int | None = None
     reader: str = "sydafa"
 
@@ -369,6 +370,21 @@ ExecOperation = Annotated[
 
 class ExecRequest(BaseModel):
     operations: list[ExecOperation]
+
+
+class SourceInitSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["mssql", "oracle"]
+    operations: list[ExecOperation] = Field(default_factory=list)
+
+
+class CreateSourceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    type: Literal["mssql", "oracle"]
+    external_port: int | None = None
 
 
 class ExecResult(BaseModel):
