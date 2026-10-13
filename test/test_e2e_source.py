@@ -30,6 +30,8 @@ def http(method: str, url: str, body=None, headers=None, timeout: int = 60):
         else:
             data = json.dumps(body).encode()
     h = dict(headers or {})
+    if data is not None:
+        h.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, method=method, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
