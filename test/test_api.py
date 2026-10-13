@@ -41,6 +41,7 @@ class TestSydafaAPI(unittest.TestCase):
             },
         )
         with patch("app.sources.source_names", return_value=["mssql"]), \
+             patch("app.main._wake", return_value={}), \
              patch("app.sources.get_source", return_value=fake_cfg), \
              patch("app.schema_state.get_live_schema", return_value=fake_live):
             resp = self.client.get("/sources/mssql")
@@ -71,7 +72,17 @@ class TestSydafaAPI(unittest.TestCase):
             "last_used": "2026-01-01T00:00:00+00:00",
             "activated_until": "2026-01-01T00:15:00+00:00",
             "ttl_minutes": 15,
-            "host_port": 32768,
+            "connection": {
+                "type": "mssql",
+                "host": "localhost",
+                "port": 14330,
+                "database": "sydafa",
+                "user": "sydafa",
+                "password": "sydafa",
+                "parameters": {"trustServerCertificate": "true"},
+                "jdbc_url": "jdbc:sqlserver://localhost:14330;databaseName=sydafa;trustServerCertificate=true;encrypt=false",
+            },
+            "host_port": 14330,
             "published": True,
         }
         with patch("app.sources.source_names", return_value=["mssql"]), \
@@ -79,8 +90,28 @@ class TestSydafaAPI(unittest.TestCase):
             resp = self.client.post("/sources/mssql/activate?ttl_minutes=15")
             self.assertEqual(resp.status_code, 200)
             data = resp.json()
-            self.assertEqual(data["host_port"], 32768)
+            self.assertEqual(data["host_port"], 14330)
             self.assertTrue(data["published"])
+            self.assertEqual(data["connection"]["user"], "sydafa")
+            self.assertEqual(data["connection"]["port"], 14330)
+
+    def test_activate_source_ttl_fallback(self):
+        status = {
+            "source": "mssql",
+            "state": "running",
+            "last_used": "2026-01-01T00:00:00+00:00",
+            "activated_until": "2026-01-01T00:15:00+00:00",
+            "ttl_minutes": 15,
+            "connection": None,
+            "host_port": 14330,
+            "published": True,
+        }
+        with patch("app.sources.source_names", return_value=["mssql"]), \
+             patch("app.container_manager.wake_up", return_value=status) as mock_wake:
+            resp = self.client.post("/sources/mssql/activate?ttl_minutes=45")
+            self.assertEqual(resp.status_code, 200)
+            mock_wake.assert_called_once()
+            self.assertEqual(mock_wake.call_args[1]["ttl_minutes"], 15)
 
     def test_source_status(self):
         status = {

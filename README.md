@@ -6,105 +6,48 @@
 
 ---
 
-## Архитектура
+## Архитектура и принципы работы
 
-Источники СУБД **не поднимаются при старте** sydafa. Контейнер источника создаётся (или будится) по требованию: либо неявно при обращении к API данных (`/exec`, `/schema/evolve`, append/update/delete), либо явно через `POST /sources/{source}/activate` (инспекция из DBeaver).
+### Быстрый старт и экономия ресурсов
+Сервис `sydafa` запускается мгновенно (за 1-2 секунды). Сами базы данных (MSSQL, Oracle) **не стартуют вместе с сервисом** и не расходуют память компьютера вхолостую. База поднимается автоматически только тогда, когда к ней поступает обращение:
+- Неявно при отправке данных или схемы через `POST /sources/{source}/exec`;
+- Либо явно через `POST /sources/{source}/activate` (для работы аналитика в DBeaver или перед ETL).
+
+Проверка работоспособности (`GET /health`) подтверждает готовность самого сервиса sydafa принимать команды, поэтому весь стек стенда поднимается без задержек.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> idle: yaml есть, контейнер остановлен или ещё не создан
-    idle --> starting: wake_up (exec или activate)
-    starting --> running: provision + init (если live_schema пуста)
-    running --> idle: deactivate или idle-таймер (activated_until)
+    [*] --> idle: контейнер остановлен или еще не создан
+    idle --> running: wake_up (exec или activate) -> docker start
+    running --> idle: истечение честного TTL или deactivate -> docker stop
 ```
 
-Ключевые компоненты:
-
-| Модуль | Роль |
-|---|---|
-| `app/secrets.py` | Однократная генерация паролей в `/state/secrets.json` (не логируются, не отдаются API) |
-| `app/container_manager.py` | Docker SDK: named volume `{source}-data`, `wake_up` / `deactivate`, публикация host-порта только на activate |
-| `app/source_status.py` | Persist `/state/source_status.{source}.json` (`state`, `activated_until`, `host_port`) |
-| `app/init_apply.py` | `init.json` применяется **один раз** на источник с пустой `live_schema` |
-| `app/provisioning.py` | Идемпотентный bootstrap БД/логинов; `sa` отключается; `pdbadmin` удаляется |
-| idle-таймер | Фоновый цикл: при `now > activated_until` вызывает `deactivate` |
-
-Данные строк живут в named volume (`mssql`: `/var/opt/mssql`, `oracle`: `/opt/oracle/oradata`). Описание схемы — в volume `sydafa_state` (`/state`). `stop` и recreate контейнера данные не уничтожают; `docker rm -v` / `compose down -v` — уничтожают.
-
-`GET /health` возвращает 200, когда **сам sydafa** готов (yaml источников прочитан). Готовность конкретной БД — `GET /sources/{source}/status`. Зависимые сервисы в Compose не должны ждать прогрева Oracle через healthcheck sydafa.
+### Честное время жизни (TTL) и сохранение данных
+- При активации источника устанавливается время активности (по умолчанию **15 минут**).
+- Максимальное время настраивается переменной окружения `SYDAFA_MAX_TTL_MINUTES` (по умолчанию **30 минут**). Если запрошено значение больше максимума, автоматически применяется дефолтное значение 15 минут.
+- Каждое обращение к API продлевает таймер активности.
+- **Честная остановка**: если в течение заданного времени обращений к API не было, фоновый процесс останавливает контейнер (`docker stop`) и освобождает RAM, даже если в DBeaver осталось открытое сетевое окно.
+- **Сохранность данных**: все данные и таблицы хранятся в постоянных томах Docker (`sydafa-mssql-data`, `sydafa-oracle-data`). При остановке и повторном пробуждении данные не теряются.
 
 ---
 
-## Модель доступа (два рабочих аккаунта)
+## Модель доступа: простота и безопасность
 
-| Аккаунт | Роль | Пароль | Кто подключается |
-|---|---|---|---|
-| `sydafa` | sysadmin / DBA | случайный, только в `/state/secrets.json` | **только процессы sydafa** (через API) |
-| `reader` (имя из `reader:` в yaml) | только чтение | **пароль = имя** | ETL (spark/airflow) и инспекция из DBeaver |
+| Учетная запись | Логин | Пароль | Права | Кто использует |
+| :--- | :--- | :--- | :--- | :--- |
+| **Публичный читатель** | `sydafa` | `sydafa` | Только чтение (`SELECT`) | Spark, Airflow, Trino, DBeaver |
+| **Внутренний DBA** | Случайный | Случайный | Полные (sysadmin / DBA) | **Только ядро sydafa** (скрыт в `/state/secrets.json`) |
+| **Вендорные админы** | `sa`, `pdbadmin` | — | Отключены / удалены | Заблокированы |
 
-Встроенные админы нейтрализованы: MSSQL `sa` — `ALTER LOGIN [sa] DISABLE`; Oracle `pdbadmin` — `DROP USER`; `SYS`/`SYSTEM` получают случайный пароль (удалить их нельзя — это ядро СУБД).
-
-Схема данных меняется **только через API**. Ручной DDL из DBeaver под `sydafa` невозможен: пароль сервису известен, человеку — нет. Обратная синхронизация ручных изменений в `live_schema` не поддерживается.
-
----
-
-## Возможности
-
-- **Ленивая оркестрация контейнеров СУБД** через Docker Python SDK, штатные образы вендоров.
-- **Однократный `init.json`**: на первом `wake_up` пустого источника создаются схемы/таблицы; повторный старт не пытается пересоздать существующее.
-- **Единый транзакционный `POST /sources/{source}/exec`**: DDL + DML, All-or-Nothing.
-- **Lifecycle API**: `status` / `activate` / `deactivate` — отдельная группа ручек от данных.
-- DDL: `create_schema`, `drop_schema`, `rename_schema`, `create_table`, `drop_table`, `rename_table`, `transfer_table`, `add_column`, `drop_column`, `rename_column`.
-- DML: `truncate`, `append`, `update`, `delete` (FK-aware, генераторы `sequence` / `faker` / `choice` / `random_decimal` / `random_date`).
+- Имя рабочей базы данных: **`sydafa`**.
+- Публичный пользователь для любых проверок и выгрузок: **`sydafa` / `sydafa`**.
+- Внести изменения в структуру базы в обход API невозможно: под учеткой `sydafa` доступны только операции чтения, а пароль суперпользователя знает только сам сервис.
 
 ---
 
-## Интеграция в сторонние проекты
+## Конфигурация источников стенда
 
-### 1. Подключение в `docker-compose.yaml`
-
-```yaml
-services:
-  sydafa:
-    image: ${SYDAFA_IMAGE:-ghcr.io/georgekochergin/sydafa:latest}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./sydafa:/app/config:ro
-      - sydafa_state:/state
-    ports:
-      - "8090:8000"
-    networks:
-      - <network-name>
-
-volumes:
-  sydafa_state:
-
-networks:
-  <network-name>:
-```
-
-> 1. **HEALTHCHECK** встроен в образ (опрос `/health`). Для зависимых сервисов: `depends_on: { sydafa: { condition: service_healthy } }` — это готовность API, не прогрев MSSQL/Oracle.
-> 2. Пароли `sa`/`SYS`/`sydafa` генерируются внутри сервиса. Их не нужно (и нельзя) задавать в compose.
-> 3. Нужен Docker Socket: sydafa оркестрирует контейнеры источников в сети проекта.
-> 4. Host-порты источников **не** публикуются в compose — их выдаёт `POST /activate`.
-
-Переменная `SYDAFA_CONTAINER_PREFIX` (опционально) префиксирует имена контейнеров и volume источников, чтобы тестовый прогон не пересекался с живым стендом.
-
-### 2. Конфигурация источников и `init.json`
-
-В смонтированной директории:
-
-- `sources/*.yaml` — по файлу на источник. Поле `port:` — **внутренний** порт СУБД (контракт docker-сети), не host-порт.
-- `init.json` (опционально) — начальная раскладка. Применяется **один раз**, когда `live_schema` источника пуста.
-
-```yaml
-# sources/mssql.yaml
-type: mssql
-host: mssql-source
-port: 1433
-reader: reader
-```
-
+Источники объявляются декларативно через единственный файл **`init.json`**:
 ```json
 {
   "sources": {
@@ -124,119 +67,136 @@ reader: reader
   }
 }
 ```
+- Если для источника передан пустой список операций (`"mssql": []`), `sydafa` разворачивает чистую рабочую базу `sydafa` без создания демо-таблиц.
+- Файлы конфигурации источников на диске больше не требуются — сервис автоматически регистрирует базы по ключам `init.json`.
+- Внутренние имена хостов в Docker-сети: **`sydafa-mssql-source`** (порт `1433`) и **`sydafa-oracle-source`** (порт `1521`).
 
-Добавление источника на **живом** стенде: положить новый `sources/oracle.yaml`, при необходимости дописать блок в `init.json`, перезапустить **только** сервис sydafa (`docker compose up -d sydafa`). Не запускать `test.sh` и не делать `down -v`. После первого обращения/activate oracle получит init; mssql с непустой `live_schema` init пропустит.
+---
 
-### 3. Подключение ETL (чтение)
+## Интеграция в Docker Compose
 
-ETL ходит **внутри docker-сети** на `host:port` из yaml под `reader` / `reader` (или другим именем из поля `reader`):
+```yaml
+services:
+  sydafa:
+    image: ${SYDAFA_IMAGE:-ghcr.io/georgekochergin/sydafa:latest}
+    environment:
+      - SYDAFA_MAX_TTL_MINUTES=30
+      - SYDAFA_TTL_MINUTES=15
+      # Открыть порт 14330 на хосте для подключения DBeaver с ноутбука:
+      - SYDAFA_EXT_PORT_MSSQL=14330
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./conf/sydafa/init.json:/app/config/init.json:ro
+      - sydafa_state:/state
+    ports:
+      - "8090:8000"
+    networks:
+      - stand-network
 
-- MSSQL: Host `mssql-source`, Port `1433`, Database `sydafa`, User/Password `reader`/`reader`.
-- Oracle: Host `oracle-source`, Port `1521`, Service Name `sydafa`, User/Password `reader`/`reader`.
-
-### 4. Инспекция из DBeaver (чтение)
-
-Прямого `localhost:1433` нет, пока источник не активирован.
-
-1. `POST http://localhost:<sydafa-port>/sources/{source}/activate?ttl_minutes=15`
-2. Из JSON-ответа взять `host_port`.
-3. В DBeaver:
-   - **MSSQL**: Host `localhost`, Port = `host_port`, Database `sydafa`, User `reader`, Password `reader`.
-   - **Oracle**: Host `localhost`, Port = `host_port`, Service name `sydafa`, User `reader`, Password `reader`.
-4. По истечении `ttl_minutes` без обращений к API контейнер останавливается, DBeaver-сессия обрывается. Продлить: снова `activate` или любой `/exec`.
-
-### 5. Очистка в CI
-
-Тестовый прогон должен использовать `SYDAFA_CONTAINER_PREFIX` и удалять **только** свои контейнеры/volume:
-
-```bash
-docker rm -f sydafa-test-mssql-source sydafa-test-oracle-source >/dev/null 2>&1 || true
+volumes:
+  sydafa_state:
 ```
 
-Не вызывать `docker rm -f mssql-source oracle-source`, если параллельно крутится живой стенд.
+### Назначение внешних портов (`SYDAFA_EXT_PORT_<SOURCE>`)
+- Внутри Docker-сети сервисы стенда (Spark, Airflow) обращаются к стандартным портам СУБД (`sydafa-mssql-source:1433`).
+- Переменная `SYDAFA_EXT_PORT_MSSQL=14330` указывает сервису `sydafa` опубликовать внешний порт на хост-машине (ноутбуке), чтобы к базе мог подключиться DBeaver. Если переменная не задана, порт наружу не публикуется.
+
+---
+
+## Как подключиться и работать с источником
+
+### 1. Подключение ETL (Spark, Airflow внутри Docker-сети)
+Spark и Airflow подключаются к СУБД напрямую во внутренней сети:
+- **MSSQL**: Host `sydafa-mssql-source`, Port `1433`, Database `sydafa`, User `sydafa`, Password `sydafa`.
+- **Oracle**: Host `sydafa-oracle-source`, Port `1521`, Service Name `sydafa`, User `sydafa`, Password `sydafa`.
+
+Перед началом объемной выгрузки пайплайн может вызвать `POST /sources/mssql/activate?ttl_minutes=20`, гарантируя бодрствование базы на все время выполнения задачи.
+
+### 2. Инспекция из DBeaver с ноутбука
+1. Выполните запрос на активацию:
+   ```bash
+   curl -X POST "http://localhost:8090/sources/mssql/activate?ttl_minutes=15"
+   ```
+2. В ответе придут полные реквизиты подключения (`connection`):
+   ```json
+   {
+     "source": "mssql",
+     "state": "running",
+     "activated_until": "2026-10-13T16:00:00Z",
+     "ttl_minutes": 15,
+     "connection": {
+       "type": "mssql",
+       "host": "localhost",
+       "port": 14330,
+       "database": "sydafa",
+       "user": "sydafa",
+       "password": "sydafa",
+       "parameters": {
+         "trustServerCertificate": "true"
+       },
+       "jdbc_url": "jdbc:sqlserver://localhost:14330;databaseName=sydafa;trustServerCertificate=true;encrypt=false"
+     }
+   }
+   ```
+3. В DBeaver создайте постоянное подключение на `localhost:14330` под пользователем `sydafa` / `sydafa` (для MSSQL отметьте флаг *Trust Server Certificate*). База готова к работе.
 
 ---
 
 ## REST API
 
-Swagger UI: `http://localhost:<host-порт-sydafa>/docs` (host-порт из compose, не хардкодить).
+Интерактивная документация Swagger UI доступна по адресу: `http://localhost:<порт-sydafa>/docs`.
 
 ### Жизненный цикл источника
-
 | Метод | Путь | Назначение |
-| --- | --- | --- |
-| GET | `/sources/{source}/status` | `{state, last_used, activated_until, ttl_minutes, host_port, published}` |
-| POST | `/sources/{source}/activate?ttl_minutes=15` | Разбудить + опубликовать host-порт; в ответе `host_port` |
-| POST | `/sources/{source}/deactivate` | Остановить контейнер, снять публикацию |
+| :--- | :--- | :--- |
+| `GET` | `/sources/{source}/status` | Текущий статус, срок TTL и реквизиты подключения `connection` |
+| `POST` | `/sources/{source}/activate?ttl_minutes=15` | Пробуждение базы и продление TTL (лимит до 30 мин) |
+| `POST` | `/sources/{source}/deactivate` | Принудительная остановка базы для освобождения RAM |
 
-### Данные и схема
-
-| Метод | Путь | Назначение | Тело |
-| --- | --- | --- | --- |
-| GET | `/health` | Готовность API sydafa | — |
-| GET | `/sources` | Список источников из yaml | — |
-| GET | `/sources/{source}` | Реквизиты, reader, список схем/таблиц | — |
-| GET | `/sources/{source}/schema` | live-схема JSON | — |
-| GET | `/tables/{source}/{schema}/{table}` | Спецификация таблицы | — |
-| POST | `/sources/{source}/exec` | Транзакционный DDL+DML | `{"operations": [...]}` |
-
-Ручки данных **неявно** вызывают `wake_up` (без публикации host-порта). Это не HTTP-вызов `activate`.
+### Управление данными и схемой
+| Метод | Путь | Назначение |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Готовность сервиса sydafa |
+| `GET` | `/sources` | Список зарегистрированных источников |
+| `GET` | `/sources/{source}` | Метаданные источника, схемы, таблицы и connection |
+| `GET` | `/sources/{source}/schema` | Текущая live-схема в JSON |
+| `POST` | `/sources/{source}/exec` | Единый транзакционный метод DDL + DML |
 
 ---
 
 ## Единый метод исполнения (POST /sources/{source}/exec)
 
-Все операции в одной транзакции СУБД. Ошибка → ROLLBACK, HTTP 422 (409 при конфликте FK).
+Все операции выполняются в одной транзакции СУБД (All-or-Nothing). При ошибке транзакция откатывается.
+Вызов `/exec` автоматически будит источник, если он находился в спящем режиме.
 
-### DDL
-- `create_schema`: `{"op": "create_schema", "name": "demo"}`
-- `create_table`:
-  ```json
-  {
-    "op": "create_table",
-    "schema": "demo",
-    "name": "customers",
-    "primary_key": ["customer_id"],
-    "columns": [
-      {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
-      {"name": "name", "type": "string", "generator": {"kind": "faker", "provider": "company"}},
-      {"name": "segment", "type": "string", "generator": {"kind": "choice", "values": ["Retail", "Corporate", "VIP"]}}
-    ],
-    "foreign_keys": []
-  }
-  ```
-- `add_column`: `{"op": "add_column", "schema": "demo", "table": "customers", "column": {"name": "discount", "type": "decimal(5,2)"}}`
-- `rename_column` / `drop_column` / `rename_table` / `drop_table` / `transfer_table` / `rename_schema` / `drop_schema` — см. скилл `.agents/skills/sydafa-api/SKILL.md`.
-
-### DML
-- `truncate`: `{"op": "truncate", "schema": "demo", "table": "orders", "cascade": true}`
-- `append`: `{"op": "append", "schema": "demo", "table": "customers", "rows": 10, "new_key_ratio": 0.0}`
-- `update` / `delete` — предикат `{"column","operator","value"}`, операторы `= != > < >= <=`.
+Пример создания структуры и генерации синтетических строк:
+```json
+{
+  "operations": [
+    {"op": "create_schema", "name": "demo"},
+    {
+      "op": "create_table",
+      "schema": "demo",
+      "name": "customers",
+      "primary_key": ["customer_id"],
+      "columns": [
+        {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
+        {"name": "name", "type": "string", "generator": {"kind": "faker", "provider": "company"}},
+        {"name": "segment", "type": "string", "generator": {"kind": "choice", "values": ["Retail", "Corporate", "VIP"]}}
+      ]
+    },
+    {"op": "append", "schema": "demo", "table": "customers", "rows": 100}
+  ]
+}
+```
 
 ---
 
-## Поддерживаемые типы данных
+## Перспективы развития: sydafa как удаленный сервис (Модель Б)
 
-| Логический тип | MSSQL DDL | Oracle DDL | Spark/Iceberg тип |
-|---|---|---|---|
-| `bigint` | `BIGINT` | `NUMBER(19)` | `long` |
-| `string` | `NVARCHAR(400)` | `VARCHAR2(400)` | `string` |
-| `decimal(p,s)` | `DECIMAL(p,s)` | `NUMBER(p,s)` | `decimal(p,s)` |
-| `date` | `DATE` | `DATE` | `date` |
-| `timestamp` | `DATETIME2` | `TIMESTAMP` | `timestamp` |
+При развитии инфраструктуры `sydafa` может быть вынесена на отдельный постоянный сервер (Data-as-a-Service), обслуживающий сразу несколько удаленных тестовых стендов.
 
----
-
-## Тестирование
-
-1. **Unit-тесты (сборка образа):**
-   ```bash
-   docker build -t sydafa:latest .
-   ```
-2. **e2e (MSSQL, затем Oracle):**
-   ```bash
-   ./test/test.sh --e2e
-   ./test/test.sh
-   ./test/test.sh --source mssql
-   ```
-   e2e задаёт `SYDAFA_CONTAINER_PREFIX=sydafa-test-` и чистит только префиксные контейнеры/volume.
+В этом сценарии:
+1. **Инициализация по сети**: удаленный стенд передает файл `init.json` через HTTP API вызовом `POST /sources/{source}/exec`, не требуя общего дискового тома.
+2. **Внешний доступ**: СУБД слушают внешние фиксированные порты на сервере `sydafa`.
+3. **Обнаружение параметров**: удаленный стенд делает `POST /activate` и получает из объекта `connection` точный внешний адрес хоста и порта СУБД для запуска выгрузок Spark/Airflow.

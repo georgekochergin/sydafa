@@ -23,6 +23,8 @@ def find_init_file() -> Path | None:
         Path("/app/config/init.json"),
         Path("config/init.json"),
         Path("sydafa/init.json"),
+        Path("conf/sydafa/init.json"),
+        Path("test/sydafa/init.json"),
         Path(__file__).parent.parent / "config" / "init.json",
     ]
     for c in candidates:

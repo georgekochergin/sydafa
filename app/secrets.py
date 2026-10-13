@@ -16,9 +16,14 @@ _cached: "AppSecrets | None" = None
 
 @dataclass(frozen=True)
 class AppSecrets:
-    sydafa_password: str
+    dba_user: str
+    dba_password: str
     mssql_sa_password: str
     oracle_sys_password: str
+
+    @property
+    def sydafa_password(self) -> str:
+        return self.dba_password
 
 
 def _alnum_password(prefix: str, nbytes: int = 12) -> str:
@@ -30,8 +35,10 @@ def _mssql_sa_password() -> str:
 
 
 def _generate() -> AppSecrets:
+    dba_user = f"SYDAFA_ADMIN_{pysecrets.token_hex(4).upper()}"
     return AppSecrets(
-        sydafa_password=_alnum_password("Sy"),
+        dba_user=dba_user,
+        dba_password=_alnum_password("Sy"),
         mssql_sa_password=_mssql_sa_password(),
         oracle_sys_password=_alnum_password("Or"),
     )
@@ -46,8 +53,11 @@ def get_secrets() -> AppSecrets:
     path = STATE_DIR / _SECRETS_FILE
     if path.exists():
         raw = json.loads(path.read_text(encoding="utf-8"))
+        dba_user = raw.get("dba_user") or f"SYDAFA_ADMIN_{pysecrets.token_hex(4)}"
+        dba_password = raw.get("dba_password") or raw.get("sydafa_password") or _alnum_password("Sy")
         _cached = AppSecrets(
-            sydafa_password=raw["sydafa_password"],
+            dba_user=dba_user,
+            dba_password=dba_password,
             mssql_sa_password=raw["mssql_sa_password"],
             oracle_sys_password=raw["oracle_sys_password"],
         )

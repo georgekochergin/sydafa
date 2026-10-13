@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import app.exec_engine
 from app.init_apply import apply_init_for_source, is_initialized
 from app.models import LiveSchema, TableSchema, ColumnSpec
 

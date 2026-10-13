@@ -13,9 +13,14 @@ from docker.errors import NotFound
 from .constants import (
     CONTAINER_PREFIX,
     DATA_VOLUME_PATHS,
+    DEFAULT_INTERNAL_PORTS,
+    DEFAULT_TTL_MINUTES,
+    READER_PASSWORD,
+    READER_USER,
     SOURCE_IMAGES,
+    SYDAFA_DB,
 )
-from .models import SourceConfig
+from .models import ConnectionDetails, SourceConfig
 from .secrets import get_secrets
 from .sources import get_source
 from . import source_status
@@ -34,7 +39,9 @@ def _source_lock(source: str) -> threading.Lock:
 
 
 def container_name_for(config: SourceConfig) -> str:
-    return f"{CONTAINER_PREFIX}{config.host}"
+    if CONTAINER_PREFIX:
+        return f"{CONTAINER_PREFIX}{config.host.removeprefix('sydafa-')}"
+    return config.host
 
 
 def volume_name_for(source_name: str) -> str:
@@ -73,11 +80,8 @@ def _wait_for_port(host: str, port: int, timeout: int = 120) -> None:
 
 
 def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
-    """Готовность: сначала sydafa (после provisioning), иначе bootstrap sa/SYS."""
-    from .constants import SYDAFA_DB, SYDAFA_USER
-    from .secrets import get_secrets as _secrets
-
-    secrets = _secrets()
+    """Готовность: сначала dba_user (после provisioning), иначе bootstrap sa/SYS."""
+    secrets = get_secrets()
     deadline = time.time() + timeout
     last_err: Exception | None = None
 
@@ -89,8 +93,8 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     conn = pymssql.connect(
                         server=config.host,
                         port=config.port,
-                        user=SYDAFA_USER,
-                        password=secrets.sydafa_password,
+                        user=secrets.dba_user,
+                        password=secrets.dba_password,
                         database=SYDAFA_DB,
                         login_timeout=3,
                     )
@@ -112,7 +116,7 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                 import oracledb
                 try:
                     dsn = oracledb.makedsn(config.host, config.port, service_name=SYDAFA_DB)
-                    conn = oracledb.connect(user=SYDAFA_USER, password=secrets.sydafa_password, dsn=dsn)
+                    conn = oracledb.connect(user=secrets.dba_user, password=secrets.dba_password, dsn=dsn)
                     conn.close()
                     return
                 except Exception as e:
@@ -124,8 +128,12 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                         dsn=dsn,
                         mode=oracledb.AUTH_MODE_SYSDBA,
                     )
+                    cur = conn.cursor()
+                    cur.execute("SELECT open_mode FROM v$database")
+                    row = cur.fetchone()
                     conn.close()
-                    return
+                    if row and row[0] == "READ WRITE":
+                        return
             else:
                 raise ValueError(f"Неизвестный тип СУБД '{config.type}'")
         except Exception as e:
@@ -142,40 +150,41 @@ def _ensure_volume(client: docker.DockerClient, volume_name: str) -> None:
         logger.info("Создан volume %s", volume_name)
 
 
-def _published_host_port(container, internal_port: int) -> int | None:
-    try:
-        container.reload()
-    except Exception:
-        return None
-    key = f"{internal_port}/tcp"
-    ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or {}
-    bindings = ports.get(key) or []
-    if bindings and bindings[0].get("HostPort"):
-        return int(bindings[0]["HostPort"])
-    host_cfg = (container.attrs.get("HostConfig") or {}).get("PortBindings") or {}
-    bindings = host_cfg.get(key) or []
-    if bindings and bindings[0].get("HostPort"):
-        try:
-            return int(bindings[0]["HostPort"])
-        except (TypeError, ValueError):
-            return None
-    return None
+def build_connection_details(
+    source_name: str,
+    config: SourceConfig,
+    request_host: str | None = None,
+) -> ConnectionDetails:
+    is_external = bool(config.external_port)
+    port = config.external_port if is_external else config.port
+    host = "localhost" if is_external else (request_host or config.host)
 
+    params: dict[str, str] = {}
+    if config.type == "mssql":
+        params = {"trustServerCertificate": "true", "encrypt": "false"}
+        jdbc_url = f"jdbc:sqlserver://{host}:{port};databaseName={SYDAFA_DB};trustServerCertificate=true;encrypt=false"
+    elif config.type == "oracle":
+        params = {"service_name": SYDAFA_DB}
+        jdbc_url = f"jdbc:oracle:thin:@//{host}:{port}/{SYDAFA_DB}"
+    else:
+        jdbc_url = f"jdbc:{config.type}://{host}:{port}/{SYDAFA_DB}"
 
-def _has_host_ports(container) -> bool:
-    try:
-        container.reload()
-        bindings = (container.attrs.get("HostConfig") or {}).get("PortBindings") or {}
-        return bool(bindings)
-    except Exception:
-        return False
+    return ConnectionDetails(
+        type=config.type,
+        host=host,
+        port=port,
+        database=SYDAFA_DB,
+        user=READER_USER,
+        password=READER_PASSWORD,
+        parameters=params,
+        jdbc_url=jdbc_url,
+    )
 
 
 def _run_container(
     client: docker.DockerClient,
     source_name: str,
     config: SourceConfig,
-    publish: bool,
 ) -> Any:
     image_name = SOURCE_IMAGES.get(config.type)
     if not image_name:
@@ -205,15 +214,15 @@ def _run_container(
         environment = {"ORACLE_PASSWORD": secrets.oracle_sys_password}
 
     ports = None
-    if publish:
-        ports = {f"{config.port}/tcp": None}
+    if config.external_port:
+        ports = {f"{config.port}/tcp": config.external_port}
 
     logger.info(
-        "Создание контейнера %s (образ %s, volume %s, publish=%s)...",
+        "Создание контейнера %s (образ %s, volume %s, ports=%s)...",
         name,
         image_name,
         volume_name,
-        publish,
+        ports,
     )
     container = client.containers.run(
         image=image_name,
@@ -243,21 +252,13 @@ def _get_container(client: docker.DockerClient, name: str):
         return None
 
 
-def _recreate(client: docker.DockerClient, source_name: str, config: SourceConfig, publish: bool):
-    name = container_name_for(config)
-    existing = _get_container(client, name)
-    if existing is not None:
-        logger.info("Пересоздание контейнера %s (publish=%s)", name, publish)
-        try:
-            existing.stop(timeout=20)
-        except Exception:
-            pass
-        existing.remove(v=False)
-    return _run_container(client, source_name, config, publish)
-
-
-def wake_up(source_name: str, ttl_minutes: int, publish: bool = False) -> dict[str, Any]:
-    """Поднимает контейнер источника, при необходимости публикует host-порт."""
+def wake_up(
+    source_name: str,
+    ttl_minutes: int,
+    publish: bool = False,
+    request_host: str | None = None,
+) -> dict[str, Any]:
+    """Поднимает контейнер источника, гарантирует готовность и обновляет TTL."""
     from . import init_apply, provisioning
 
     config = get_source(source_name)
@@ -267,17 +268,8 @@ def wake_up(source_name: str, ttl_minutes: int, publish: bool = False) -> dict[s
         name = container_name_for(config)
         container = _get_container(client, name)
 
-        needs_recreate = False
         if container is None:
-            container = _run_container(client, source_name, config, publish)
-        else:
-            has_ports = _has_host_ports(container)
-            if publish and not has_ports:
-                needs_recreate = True
-            if not publish and has_ports:
-                needs_recreate = True
-            if needs_recreate:
-                container = _recreate(client, source_name, config, publish)
+            container = _run_container(client, source_name, config)
 
         container.reload()
         if container.status != "running":
@@ -293,69 +285,89 @@ def wake_up(source_name: str, ttl_minutes: int, publish: bool = False) -> dict[s
         provisioning.provision_source(source_name)
         init_apply.apply_init_for_source(source_name)
 
-        host_port = _published_host_port(container, config.port) if publish else None
-        status = source_status.mark_running(source_name, ttl_minutes, host_port, publish)
-        logger.info("Источник %s готов (publish=%s, host_port=%s).", source_name, publish, host_port)
+        conn_details = build_connection_details(source_name, config, request_host=request_host)
+        status = source_status.mark_running(
+            source_name,
+            ttl_minutes,
+            config.external_port,
+            bool(config.external_port),
+            connection=conn_details.model_dump(),
+        )
+        logger.info("Источник %s готов (host=%s, port=%s).", source_name, conn_details.host, conn_details.port)
         return status
 
 
 def deactivate(source_name: str) -> dict[str, Any]:
-    """Останавливает контейнер; снимает host-порты через recreate без публикации."""
+    """Останавливает контейнер СУБД для освобождения ресурсов."""
     config = get_source(source_name)
     with _source_lock(source_name):
         client = _get_docker_client()
         name = container_name_for(config)
         container = _get_container(client, name)
-        if container is not None:
-            if _has_host_ports(container):
-                logger.info("Снятие host-портов и остановка %s", name)
-                try:
-                    container.stop(timeout=20)
-                except Exception:
-                    pass
-                container.remove(v=False)
-                created = _run_container(client, source_name, config, publish=False)
-                try:
-                    created.stop(timeout=20)
-                except Exception:
-                    pass
-            elif container.status == "running":
-                logger.info("Остановка контейнера %s", name)
+        if container is not None and container.status == "running":
+            logger.info("Остановка контейнера %s", name)
+            try:
                 container.stop(timeout=20)
+            except Exception as e:
+                logger.warning("Ошибка при остановке %s: %s", name, e)
         return source_status.mark_idle(source_name)
 
 
-def get_runtime_status(source_name: str) -> dict[str, Any]:
+def get_runtime_status(source_name: str, request_host: str | None = None) -> dict[str, Any]:
     config = get_source(source_name)
     status = source_status.load_status(source_name)
     client = _get_docker_client()
     container = _get_container(client, container_name_for(config))
     if container is None:
         status["state"] = "idle"
-        status["published"] = False
-        status["host_port"] = None
+        status["published"] = bool(config.external_port)
+        status["host_port"] = config.external_port
+        status["connection"] = None
         return status
+
     container.reload()
     if container.status == "running" and status.get("state") != "starting":
         status["state"] = "running"
-        if _has_host_ports(container):
-            status["published"] = True
-            status["host_port"] = _published_host_port(container, config.port)
-        else:
-            status["published"] = False
-            status["host_port"] = None
+        status["published"] = bool(config.external_port)
+        status["host_port"] = config.external_port
+        conn_details = build_connection_details(source_name, config, request_host=request_host)
+        status["connection"] = conn_details.model_dump()
     elif container.status != "running":
         status["state"] = "idle"
-        status["published"] = False
-        status["host_port"] = None
+        status["connection"] = None
     return status
 
 
 def sweep_idle_sources() -> None:
-    from .sources import source_names
+    """Фоновый таймер: остановка по TTL и авто-подхват ручных запусков."""
+    from .sources import get_source, source_names
 
+    client = _get_docker_client()
     for name in source_names():
+        config = get_source(name)
         status = source_status.load_status(name)
+        cname = container_name_for(config)
+        container = _get_container(client, cname)
+
+        if container is not None:
+            try:
+                container.reload()
+            except Exception:
+                pass
+
+            # Контейнер включен вручную вне API sydafa
+            if container.status == "running" and (status.get("state") != "running" or not status.get("activated_until")):
+                logger.info("Обнаружен запущенный контейнер '%s' без активного TTL. Назначен дефолтный TTL.", cname)
+                conn_details = build_connection_details(name, config)
+                source_status.mark_running(
+                    name,
+                    DEFAULT_TTL_MINUTES,
+                    config.external_port,
+                    bool(config.external_port),
+                    connection=conn_details.model_dump(),
+                )
+                continue
+
         if source_status.is_expired(status):
             logger.info("Idle-таймер: деактивация источника '%s'", name)
             try:

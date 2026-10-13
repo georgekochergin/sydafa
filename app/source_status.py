@@ -26,6 +26,7 @@ def empty_status(source: str) -> dict[str, Any]:
         "last_used": None,
         "activated_until": None,
         "ttl_minutes": DEFAULT_TTL_MINUTES,
+        "connection": None,
         "host_port": None,
         "published": False,
     }
@@ -51,7 +52,13 @@ def save_status(source: str, status: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
-def mark_running(source: str, ttl_minutes: int, host_port: int | None, published: bool) -> dict[str, Any]:
+def mark_running(
+    source: str,
+    ttl_minutes: int,
+    host_port: int | None,
+    published: bool,
+    connection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ts = now_utc().isoformat()
     until = datetime.fromtimestamp(now_utc().timestamp() + ttl_minutes * 60, tz=timezone.utc).isoformat()
     status = load_status(source)
@@ -61,6 +68,7 @@ def mark_running(source: str, ttl_minutes: int, host_port: int | None, published
             "last_used": ts,
             "activated_until": until,
             "ttl_minutes": ttl_minutes,
+            "connection": connection,
             "host_port": host_port,
             "published": published,
         }
@@ -70,7 +78,13 @@ def mark_running(source: str, ttl_minutes: int, host_port: int | None, published
 
 def mark_idle(source: str) -> dict[str, Any]:
     status = load_status(source)
-    status.update({"state": "idle", "activated_until": None, "host_port": None, "published": False})
+    status.update({
+        "state": "idle",
+        "activated_until": None,
+        "connection": None,
+        "host_port": None,
+        "published": False,
+    })
     return save_status(source, status)
 
 

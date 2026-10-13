@@ -16,18 +16,20 @@ def mssql_connection(source_name: str = "mssql", database: str | None = None, au
     import pymssql
     cfg = get_source(source_name)
     target_db = database or SYDAFA_DB
-    password = get_secrets().sydafa_password
+    secrets = get_secrets()
+    dba_user = secrets.dba_user
+    password = secrets.dba_password
     try:
         conn = pymssql.connect(
             server=cfg.host,
             port=cfg.port,
-            user=SYDAFA_USER,
+            user=dba_user,
             password=password,
             database=target_db,
             autocommit=autocommit,
         )
     except Exception as e:
-        msg = f"Ошибка подключения к MSSQL источнику '{source_name}' ({cfg.host}:{cfg.port}/{target_db}) под {SYDAFA_USER}: {e}"
+        msg = f"Ошибка подключения к MSSQL источнику '{source_name}' ({cfg.host}:{cfg.port}/{target_db}) под {dba_user}: {e}"
         logger.error(msg)
         raise RuntimeError(msg) from e
 
@@ -43,16 +45,18 @@ def oracle_connection(source_name: str = "oracle", service_name: str | None = No
     cfg = get_source(source_name)
     target_service = service_name or SYDAFA_DB
     dsn = oracledb.makedsn(cfg.host, cfg.port, service_name=target_service)
-    password = get_secrets().sydafa_password
+    secrets = get_secrets()
+    dba_user = secrets.dba_user
+    password = secrets.dba_password
     try:
         conn = oracledb.connect(
-            user=SYDAFA_USER,
+            user=dba_user,
             password=password,
             dsn=dsn,
             mode=mode,
         )
     except Exception as e:
-        msg = f"Ошибка подключения к Oracle источнику '{source_name}' ({cfg.host}:{cfg.port}/{target_service}) под {SYDAFA_USER}: {e}"
+        msg = f"Ошибка подключения к Oracle источнику '{source_name}' ({cfg.host}:{cfg.port}/{target_service}) под {dba_user}: {e}"
         logger.error(msg)
         raise RuntimeError(msg) from e
 

@@ -13,9 +13,10 @@ class SourceConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     type: Literal["mssql", "oracle"]
-    host: str
-    port: int
-    reader: str = "reader"
+    host: str = ""
+    port: int | None = None
+    external_port: int | None = None
+    reader: str = "sydafa"
 
 
 # --- Генераторы синтетических данных ---
@@ -413,11 +414,25 @@ class SourceInfo(BaseModel):
     tables: list[TableRef]
 
 
+class ConnectionDetails(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["mssql", "oracle"]
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    parameters: dict[str, str] = Field(default_factory=dict)
+    jdbc_url: str
+
+
 class SourceLifecycleStatus(BaseModel):
     source: str
     state: str
     last_used: str | None = None
     activated_until: str | None = None
     ttl_minutes: int
+    connection: ConnectionDetails | None = None
     host_port: int | None = None
     published: bool = False

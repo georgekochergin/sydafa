@@ -19,12 +19,10 @@ JSON для sydafa API.
    Формат: `http://localhost:<host-порт>/docs`.
 
 2. **Целевая ручка API** согласно актуальному коду:
-   - данные/схема: `POST /sources/{source}/exec` (основной);
+   - данные/схема: `POST /sources/{source}/exec` (основной транзакционный);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
-     (в ответе `host_port`); статус — `GET /sources/{source}/status`;
+     (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
-   (Альтернативы данных: `POST /sources/{source}/schema/evolve` и
-   `POST /tables/{source}/{schema}/{table}/append|update|delete`.)
 
 3. **JSON-тело для вставки** в Swagger UI.
 
@@ -34,14 +32,13 @@ JSON для sydafa API.
 выполняется в одной транзакции (All-or-Nothing). Порядок операций имеет
 значение: сначала DDL, затем DML.
 
-`{source}` — имя источника из `sources/*.yaml` (`mssql`, `oracle`). Если
-пользователь не задал источник — уточни или подставь плейсхолдер `{source}`.
+`{source}` — имя источника (`mssql`, `oracle`).
 
 ## Lifecycle (инспекция)
 
 Для «подключись из DBeaver» сначала `POST /sources/{source}/activate?ttl_minutes=15`,
-затем в ответе взять `host_port`. Креды инспекции: пользователь `reader`, пароль =
-имя (`reader`/`reader` по умолчанию). Админ `sydafa` снаружи недоступен.
+затем в ответе взять объект `connection` (host, port, database, user, password, parameters).
+Публичные реквизиты инспектора/читателя: пользователь `sydafa`, пароль `sydafa`. Админ СУБД снаружи недоступен.
 
 ## Логические типы колонок (`columns[].type`)
 

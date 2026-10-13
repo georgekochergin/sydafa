@@ -5,10 +5,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
 from . import container_manager, exec_engine, generators, schema_engine, schema_state, sources
-from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, SYDAFA_DB
+from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
 from .exec_engine import ExecError
 from .generators import GeneratorError, PredicateError
 from .models import (
@@ -109,11 +109,14 @@ def list_sources():
 
 
 @app.get("/sources/{source}", response_model=SourceInfo)
-def get_source_info(source: str):
+def get_source_info(source: str, request: Request):
     _assert_source(source)
+    _wake(source)
     cfg = sources.get_source(source)
     live = schema_state.get_live_schema(source)
     tables_refs = [TableRef(schema=t.schema_, name=t.name) for t in live.tables.values()]
+    request_host = request.url.hostname if request else None
+    conn = container_manager.build_connection_details(source, cfg, request_host=request_host)
     return SourceInfo(
         source=source,
         type=cfg.type,
@@ -123,25 +126,39 @@ def get_source_info(source: str):
         reader=cfg.reader,
         schemas=live.schemas,
         tables=tables_refs,
+        connection=conn,
     )
 
 
 @app.get("/sources/{source}/schema")
 def get_source_schema(source: str):
     _assert_source(source)
+    _wake(source)
     return schema_state.get_live_schema(source).model_dump(by_alias=True)
 
 
 @app.get("/sources/{source}/status", response_model=SourceLifecycleStatus)
-def get_source_status(source: str):
+def get_source_status(source: str, request: Request):
     _assert_source(source)
-    return SourceLifecycleStatus(**container_manager.get_runtime_status(source))
+    request_host = request.url.hostname if request else None
+    return SourceLifecycleStatus(**container_manager.get_runtime_status(source, request_host=request_host))
 
 
 @app.post("/sources/{source}/activate", response_model=SourceLifecycleStatus)
-def activate_source(source: str, ttl_minutes: int = Query(default=DEFAULT_TTL_MINUTES, ge=1, le=24 * 60)):
+def activate_source(
+    source: str,
+    request: Request,
+    ttl_minutes: int | None = Query(default=None, description="Время жизни в минутах (макс. SYDAFA_MAX_TTL_MINUTES, по умолчанию 15)"),
+):
     _assert_source(source)
-    return SourceLifecycleStatus(**_wake(source, ttl_minutes=ttl_minutes, publish=True))
+    if ttl_minutes is None or ttl_minutes > MAX_TTL_MINUTES or ttl_minutes <= 0:
+        effective_ttl = DEFAULT_TTL_MINUTES
+    else:
+        effective_ttl = ttl_minutes
+    request_host = request.url.hostname if request else None
+    return SourceLifecycleStatus(
+        **container_manager.wake_up(source, ttl_minutes=effective_ttl, publish=True, request_host=request_host)
+    )
 
 
 @app.post("/sources/{source}/deactivate", response_model=SourceLifecycleStatus)
@@ -173,7 +190,7 @@ def exec_source(source: str, req: ExecRequest):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка выполнения exec: {exc}") from exc
 
 
-@app.post("/sources/{source}/schema/evolve", response_model=EvolveResult)
+@app.post("/sources/{source}/schema/evolve", response_model=EvolveResult, deprecated=True)
 def evolve_source_schema(source: str, req: EvolveRequest):
     _assert_source(source)
     _wake(source)
@@ -186,7 +203,7 @@ def evolve_source_schema(source: str, req: EvolveRequest):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка выполнения эволюции: {exc}") from exc
 
 
-@app.post("/tables/{source}/{schema}/{table}/append")
+@app.post("/tables/{source}/{schema}/{table}/append", deprecated=True)
 def append_table_rows(source: str, schema: str, table: str, req: AppendRequest):
     _wake(source)
     live, _ = _resolve_table(source, schema, table)
@@ -197,7 +214,7 @@ def append_table_rows(source: str, schema: str, table: str, req: AppendRequest):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Ошибка добавления строк: {exc}") from exc
 
 
-@app.post("/tables/{source}/{schema}/{table}/update")
+@app.post("/tables/{source}/{schema}/{table}/update", deprecated=True)
 def update_table_rows(source: str, schema: str, table: str, req: UpdateRequest):
     _wake(source)
     live, _ = _resolve_table(source, schema, table)
@@ -210,7 +227,7 @@ def update_table_rows(source: str, schema: str, table: str, req: UpdateRequest):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка обновления: {exc}") from exc
 
 
-@app.post("/tables/{source}/{schema}/{table}/delete")
+@app.post("/tables/{source}/{schema}/{table}/delete", deprecated=True)
 def delete_table_rows(source: str, schema: str, table: str, req: DeleteRequest):
     _wake(source)
     live, _ = _resolve_table(source, schema, table)
