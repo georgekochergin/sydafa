@@ -22,7 +22,7 @@ def check(name: str, actual: any, expected: any):
         FAIL += 1
 
 
-def http(method: str, url: str, body=None, headers=None, timeout: int = 60):
+def http(method: str, url: str, body=None, headers=None, timeout: int = 300):
     data = None
     if body is not None:
         if isinstance(body, (bytes, str)):

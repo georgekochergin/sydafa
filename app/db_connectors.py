@@ -1,10 +1,11 @@
-"""Подключения к источникам данных под суперпользователем sydafa/sydafa."""
+"""Подключения к источникам данных под суперпользователем sydafa."""
 from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
 
-from .constants import SYDAFA_DB, SYDAFA_PASSWORD, SYDAFA_USER
+from .constants import SYDAFA_DB, SYDAFA_USER
+from .secrets import get_secrets
 from .sources import get_source
 
 logger = logging.getLogger("sydafa.db_connectors")
@@ -15,12 +16,13 @@ def mssql_connection(source_name: str = "mssql", database: str | None = None, au
     import pymssql
     cfg = get_source(source_name)
     target_db = database or SYDAFA_DB
+    password = get_secrets().sydafa_password
     try:
         conn = pymssql.connect(
             server=cfg.host,
             port=cfg.port,
             user=SYDAFA_USER,
-            password=SYDAFA_PASSWORD,
+            password=password,
             database=target_db,
             autocommit=autocommit,
         )
@@ -41,10 +43,11 @@ def oracle_connection(source_name: str = "oracle", service_name: str | None = No
     cfg = get_source(source_name)
     target_service = service_name or SYDAFA_DB
     dsn = oracledb.makedsn(cfg.host, cfg.port, service_name=target_service)
+    password = get_secrets().sydafa_password
     try:
         conn = oracledb.connect(
             user=SYDAFA_USER,
-            password=SYDAFA_PASSWORD,
+            password=password,
             dsn=dsn,
             mode=mode,
         )
@@ -61,7 +64,6 @@ def oracle_connection(source_name: str = "oracle", service_name: str | None = No
 
 @contextmanager
 def get_connection(source_name: str, database: str | None = None, autocommit: bool = False):
-    """Универсальный менеджер контекста подключения к источнику по его типу."""
     cfg = get_source(source_name)
     if cfg.type == "mssql":
         with mssql_connection(source_name=source_name, database=database, autocommit=autocommit) as conn:

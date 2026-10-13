@@ -18,11 +18,13 @@ JSON для sydafa API.
    Не хардкодь порт: найди его в актуальном `docker-compose.yaml` проекта.
    Формат: `http://localhost:<host-порт>/docs`.
 
-2. **Целевая ручка API** согласно актуальному коду sydafa — основной метод
-   исполнения: `POST /sources/{source}/exec`.
-   (Альтернативы: `POST /sources/{source}/schema/evolve` для чистого DDL и
-   `POST /tables/{source}/{schema}/{table}/append|update|delete` для точечного
-   DML — указывай их только когда они очевидно уместнее, иначе всегда `exec`.)
+2. **Целевая ручка API** согласно актуальному коду:
+   - данные/схема: `POST /sources/{source}/exec` (основной);
+   - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
+     (в ответе `host_port`); статус — `GET /sources/{source}/status`;
+     остановка — `POST /sources/{source}/deactivate`.
+   (Альтернативы данных: `POST /sources/{source}/schema/evolve` и
+   `POST /tables/{source}/{schema}/{table}/append|update|delete`.)
 
 3. **JSON-тело для вставки** в Swagger UI.
 
@@ -34,6 +36,12 @@ JSON для sydafa API.
 
 `{source}` — имя источника из `sources/*.yaml` (`mssql`, `oracle`). Если
 пользователь не задал источник — уточни или подставь плейсхолдер `{source}`.
+
+## Lifecycle (инспекция)
+
+Для «подключись из DBeaver» сначала `POST /sources/{source}/activate?ttl_minutes=15`,
+затем в ответе взять `host_port`. Креды инспекции: пользователь `reader`, пароль =
+имя (`reader`/`reader` по умолчанию). Админ `sydafa` снаружи недоступен.
 
 ## Логические типы колонок (`columns[].type`)
 

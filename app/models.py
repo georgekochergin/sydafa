@@ -411,3 +411,13 @@ class SourceInfo(BaseModel):
     reader: str
     schemas: list[str]
     tables: list[TableRef]
+
+
+class SourceLifecycleStatus(BaseModel):
+    source: str
+    state: str
+    last_used: str | None = None
+    activated_until: str | None = None
+    ttl_minutes: int
+    host_port: int | None = None
+    published: bool = False

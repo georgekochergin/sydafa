@@ -65,11 +65,12 @@ fi
 WORK_DIR=$(pwd)
 TEST_NET="sydafa-test-net"
 CONF_DIR="/tmp/sydafa-e2e-conf-$$"
+SRC_PREFIX="sydafa-test-"
 
 cleanup() {
   echo "Очистка тестового окружения..."
-  docker rm -f sydafa-test mssql-source oracle-source >/dev/null 2>&1 || true
-  docker volume rm -f sydafa-test-state >/dev/null 2>&1 || true
+  docker rm -f sydafa-test "${SRC_PREFIX}mssql-source" "${SRC_PREFIX}oracle-source" >/dev/null 2>&1 || true
+  docker volume rm -f sydafa-test-state "${SRC_PREFIX}mssql-data" "${SRC_PREFIX}oracle-data" >/dev/null 2>&1 || true
   docker network rm "$TEST_NET" >/dev/null 2>&1 || true
   rm -rf "$CONF_DIR"
 }
@@ -108,12 +109,13 @@ EOF
   docker run -d --name sydafa-test \
     --network "$TEST_NET" \
     -p 8000:8000 \
+    -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR:/app/config:ro" \
     -v sydafa-test-state:/state \
     sydafa:latest
 
-  echo "Ожидание готовности MSSQL через sydafa API (до 180s)..."
+  echo "Ожидание готовности API sydafa (источник MSSQL поднимается лениво)..."
   until curl -s http://localhost:8000/health | grep -q '"status":"ok"'; do
     sleep 2
   done
@@ -127,8 +129,8 @@ EOF
   fi
 
   echo "Остановка MSSQL и очистка перед следующей фазой..."
-  docker rm -f sydafa-test mssql-source >/dev/null 2>&1
-  docker volume rm -f sydafa-test-state >/dev/null 2>&1
+  docker rm -f sydafa-test "${SRC_PREFIX}mssql-source" >/dev/null 2>&1
+  docker volume rm -f sydafa-test-state "${SRC_PREFIX}mssql-data" >/dev/null 2>&1
   rm -f "$CONF_DIR/sources/mssql.yaml"
 }
 
@@ -151,12 +153,13 @@ EOF
   docker run -d --name sydafa-test \
     --network "$TEST_NET" \
     -p 8000:8000 \
+    -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR:/app/config:ro" \
     -v sydafa-test-state:/state \
     sydafa:latest
 
-  echo "Ожидание готовности Oracle через sydafa API (до 240s)..."
+  echo "Ожидание готовности API sydafa (источник Oracle поднимается лениво)..."
   until curl -s http://localhost:8000/health | grep -q '"status":"ok"'; do
     sleep 3
   done
@@ -170,8 +173,8 @@ EOF
   fi
 
   echo "Остановка Oracle и очистка..."
-  docker rm -f sydafa-test oracle-source >/dev/null 2>&1
-  docker volume rm -f sydafa-test-state >/dev/null 2>&1
+  docker rm -f sydafa-test "${SRC_PREFIX}oracle-source" >/dev/null 2>&1
+  docker volume rm -f sydafa-test-state "${SRC_PREFIX}oracle-data" >/dev/null 2>&1
   rm -f "$CONF_DIR/sources/oracle.yaml"
 }
 
