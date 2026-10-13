@@ -27,8 +27,8 @@ def _get_docker_client() -> docker.DockerClient:
 
 def _get_context(client: docker.DockerClient) -> tuple[str, str]:
     """Определяет сеть Compose и имя проекта по метаданным контейнера sydafa."""
-    network_name = "dlh-poc"
-    project_name = "datalake_stand"
+    network_name = "bridge"
+    project_name = "sydafa"
 
     try:
         hostname = socket.gethostname()

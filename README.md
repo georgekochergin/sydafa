@@ -43,13 +43,13 @@ services:
     ports:
       - "8090:8000"
     networks:
-      - dlh-network
+      - <network-name>
 
 volumes:
   sydafa_state:
 
 networks:
-  dlh-network:
+  <network-name>:
 ```
 
 > **Особенности интеграции Plug & Play**:
