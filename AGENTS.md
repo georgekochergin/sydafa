@@ -9,10 +9,12 @@
 - Запрещено коммитить напрямую в `main`.
 
 ## Testing
-- Стандартный сценарий полной проверки сервиса:
-  `./scripts/test.sh`
-- Запуск только сквозного последовательного e2e-тестирования СУБД (MSSQL -> затем Oracle) в Docker:
-  `./scripts/test-e2e.sh`
+- Стандартный сценарий полной проверки сервиса (unit + e2e):
+  `./test/test.sh`
+- Запуск только сквозного e2e-тестирования СУБД (MSSQL -> затем Oracle) в Docker:
+  `./test/test.sh --e2e`
+- Запуск тестирования конкретного источника:
+  `./test/test.sh --source mssql` или `./test/test.sh --source oracle`
 - Запуск быстрых unit-тестов внутри Dockerfile при сборке:
-  `docker build -t sydafa:latest .`
+  `./test/test.sh --unit` (или `docker build -t sydafa:latest .`)
 - Критерий успешности: 100% прохождение тестов (PASS всех этапов, exit-code 0).
