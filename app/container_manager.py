@@ -10,7 +10,11 @@ from typing import Any
 import docker
 from docker.errors import NotFound
 
-from .constants import SOURCE_IMAGES
+from .constants import (
+    DEFAULT_MSSQL_SA_PASSWORD,
+    DEFAULT_ORACLE_PASSWORD,
+    SOURCE_IMAGES,
+)
 from .models import SourceConfig
 from .sources import all_sources
 
@@ -62,7 +66,7 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
 
     if config.type == "mssql":
         import pymssql
-        sa_password = os.environ.get("MSSQL_SA_PASSWORD", "AdminPassword1!")
+        sa_password = DEFAULT_MSSQL_SA_PASSWORD
         while time.time() < deadline:
             try:
                 conn = pymssql.connect(
@@ -82,7 +86,7 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
 
     elif config.type == "oracle":
         import oracledb
-        oracle_password = os.environ.get("ORACLE_PASSWORD", "admin")
+        oracle_password = DEFAULT_ORACLE_PASSWORD
         while time.time() < deadline:
             try:
                 dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
@@ -135,7 +139,7 @@ def ensure_source_container(source_name: str, config: SourceConfig) -> None:
         }
 
         if config.type == "mssql":
-            sa_password = os.environ.get("MSSQL_SA_PASSWORD", "AdminPassword1!")
+            sa_password = DEFAULT_MSSQL_SA_PASSWORD
             environment = {
                 "ACCEPT_EULA": "Y",
                 "MSSQL_SA_PASSWORD": sa_password,
@@ -154,7 +158,7 @@ def ensure_source_container(source_name: str, config: SourceConfig) -> None:
             )
 
         elif config.type == "oracle":
-            oracle_password = os.environ.get("ORACLE_PASSWORD", "admin")
+            oracle_password = DEFAULT_ORACLE_PASSWORD
             environment = {
                 "ORACLE_PASSWORD": oracle_password,
             }

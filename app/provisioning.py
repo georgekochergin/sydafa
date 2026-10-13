@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import logging
 import os
-from .constants import SYDAFA_DB, SYDAFA_PASSWORD, SYDAFA_USER
+from .constants import (
+    DEFAULT_MSSQL_SA_PASSWORD,
+    DEFAULT_ORACLE_PASSWORD,
+    SYDAFA_DB,
+    SYDAFA_PASSWORD,
+    SYDAFA_USER,
+)
 from .db_connectors import mssql_connection, oracle_connection
 from .models import SourceConfig
 from .sources import all_sources, get_source
@@ -14,7 +20,7 @@ logger = logging.getLogger("sydafa.provisioning")
 def provision_mssql(source_name: str, config: SourceConfig) -> None:
     """Создаёт суперпользователя sydafa, БД sydafa и пользователя reader/reader в MSSQL."""
     import pymssql
-    sa_password = os.environ.get("MSSQL_SA_PASSWORD", "AdminPassword1!")
+    sa_password = DEFAULT_MSSQL_SA_PASSWORD
     logger.info("Provisioning MSSQL источника '%s'...", source_name)
 
     # 1. Первичное подключение под sa к master для создания sydafa/sydafa и базы sydafa
@@ -59,7 +65,7 @@ def provision_mssql(source_name: str, config: SourceConfig) -> None:
 def provision_oracle(source_name: str, config: SourceConfig) -> None:
     """Создаёт суперпользователя sydafa, PDB sydafa и пользователя reader/reader в Oracle."""
     import oracledb
-    oracle_password = os.environ.get("ORACLE_PASSWORD", "admin")
+    oracle_password = DEFAULT_ORACLE_PASSWORD
     logger.info("Provisioning Oracle источника '%s'...", source_name)
 
     # 1. Первичное подключение под SYS к FREE для создания sydafa и PDB sydafa

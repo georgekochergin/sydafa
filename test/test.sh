@@ -111,7 +111,6 @@ EOF
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR:/app/config:ro" \
     -v sydafa-test-state:/state \
-    -e MSSQL_SA_PASSWORD="AdminPassword1!" \
     sydafa:latest
 
   echo "Ожидание готовности MSSQL через sydafa API (до 180s)..."
@@ -155,7 +154,6 @@ EOF
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR:/app/config:ro" \
     -v sydafa-test-state:/state \
-    -e ORACLE_PASSWORD="admin" \
     sydafa:latest
 
   echo "Ожидание готовности Oracle через sydafa API (до 240s)..."

@@ -33,9 +33,6 @@
 services:
   sydafa:
     image: ${SYDAFA_IMAGE:-ghcr.io/georgekochergin/sydafa:latest}
-    environment:
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-AdminPassword1!}
-      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-admin}
     volumes:
       # 1. Доступ к Docker daemon хоста для создания и управления контейнерами СУБД
       - /var/run/docker.sock:/var/run/docker.sock
@@ -45,12 +42,6 @@ services:
       - sydafa_state:/state
     ports:
       - "8090:8000"
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').getcode() == 200 else 1)"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 90s
     networks:
       - dlh-network
 
@@ -61,9 +52,14 @@ networks:
   dlh-network:
 ```
 
-> **Важно по конфигурации**:
-> 1. **Монтирование `/var/run/docker.sock`**: сервису необходим доступ к Docker Socket, так как он запускает контейнеры СУБД в той же Docker-сети, к которой подключён сам.
-> 2. **Параметр `start_period: 90s` в healthcheck**: инициализация СУБД требует времени. Сервис возвращает `503 Service Unavailable` до тех пор, пока все источники не будут запущены и полностью настроены, после чего `/health` начинает отдавать `200 OK`.
+> **Особенности интеграции Plug & Play**:
+> 1. **Встроенный `HEALTHCHECK`**: Docker-образ `sydafa` содержит встроенную директиву `HEALTHCHECK` (периодический опрос эндпоинта `/health` с оптимальными таймаутами и периодом прогрева). Не требуется объявлять секцию `healthcheck:` в `docker-compose.yaml` — для зависимых сервисов достаточно стандартного условия:
+>    ```yaml
+>    depends_on:
+>      sydafa: { condition: service_healthy }
+>    ```
+> 2. **Инкапсуляция учетных данных СУБД**: пароли системных администраторов СУБД (`MSSQL_SA_PASSWORD`, `ORACLE_PASSWORD`) спрятаны внутри сервиса со стандартными безопасными значениями по умолчанию. Пользователю не требуется знать или указывать эти переменные окружения при подключении сервиса.
+> 3. **Монтирование `/var/run/docker.sock`**: сервису необходим доступ к Docker Socket, так как он самостоятельно оркестрирует контейнеры СУБД в Docker-сети проекта.
 
 ---
 
