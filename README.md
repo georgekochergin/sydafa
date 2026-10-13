@@ -240,6 +240,8 @@ docker rm -f mssql-source oracle-source >/dev/null 2>&1 || true
 
 2. **Сквозное последовательное e2e-тестирование СУБД в Docker**:
    ```bash
-   ./scripts/test-e2e.sh
+   ./test/test.sh --e2e
+   # Или полный прогон (unit + e2e):
+   ./test/test.sh
    ```
    Последовательно поднимает реальный MSSQL, прогоняет полный цикл API (DDL, DML append, update, delete, truncate, 409 FK cascade, 422 валидации, All-or-Nothing откат), гасит MSSQL; затем поднимает реальный Oracle, прогоняет те же проверки и очищает окружение.

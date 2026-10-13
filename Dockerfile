@@ -6,8 +6,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY tests ./tests
-RUN python -m unittest discover -s tests
+COPY test ./test
+RUN python -m unittest discover -s test
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
