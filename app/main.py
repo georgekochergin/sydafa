@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
     logger.info("Инициализация сервиса sydafa...")
     watcher: asyncio.Task | None = None
     try:
+        from . import init_apply
+        init_apply.check_and_heal_orphaned_state()
         sources.load_sources()
         _is_ready = True
         logger.info("sydafa готова (источники поднимаются лениво): %s", sources.source_names())

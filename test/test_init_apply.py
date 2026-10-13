@@ -1,76 +1,69 @@
-"""Unit-тесты однократного применения init.json."""
+"""Unit-тесты фиксации флага init_state.json, API bootstrap и self-healing."""
 from __future__ import annotations
 
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import app.exec_engine
-from app.init_apply import apply_init_for_source, is_initialized
-from app.models import LiveSchema, TableSchema, ColumnSpec
+from app.init_apply import (
+    apply_init_for_source,
+    check_and_heal_orphaned_state,
+    is_init_applied,
+    mark_init_applied,
+)
 
 
 class TestInitApply(unittest.TestCase):
-    def test_is_initialized_empty(self):
-        with patch("app.init_apply.get_live_schema", return_value=LiveSchema()):
-            self.assertFalse(is_initialized("mssql"))
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name)
 
-    def test_is_initialized_nonempty(self):
-        live = LiveSchema(schemas=["demo"], tables={})
-        with patch("app.init_apply.get_live_schema", return_value=live):
-            self.assertTrue(is_initialized("mssql"))
+    def tearDown(self):
+        self.tmp.cleanup()
 
-    def test_skip_when_initialized(self):
-        live = LiveSchema(
-            schemas=["demo"],
-            tables={
-                "demo.t": TableSchema(
-                    name="t",
-                    schema="demo",
-                    primary_key=["id"],
-                    columns=[ColumnSpec(name="id", type="bigint")],
-                )
-            },
-        )
-        with patch("app.init_apply.get_live_schema", return_value=live), \
-             patch("app.init_apply.load_init_ops", return_value={"mssql": {"type": "mssql", "operations": [{"op": "create_schema", "name": "demo"}, {"op": "create_table", "schema": "demo", "name": "t"}]}}), \
-             patch("app.exec_engine.execute_source_operations") as exe:
+    def test_flag_lifecycle(self):
+        with patch("app.init_apply.STATE_DIR", self.state):
+            self.assertFalse(is_init_applied("mssql"))
+            mark_init_applied("mssql")
+            self.assertTrue(is_init_applied("mssql"))
+            self.assertFalse(is_init_applied("oracle"))
+
+    def test_skip_when_flag_is_true(self):
+        with patch("app.init_apply.STATE_DIR", self.state),              patch("app.main.exec_source") as mock_exec,              patch("app.main.create_source") as mock_create:
+            mark_init_applied("mssql")
             apply_init_for_source("mssql")
-            exe.assert_not_called()
+            mock_create.assert_not_called()
+            mock_exec.assert_not_called()
 
-    def test_additive_seed_delta(self):
-        live = LiveSchema(
-            schemas=["demo"],
-            tables={
-                "demo.t": TableSchema(
-                    name="t",
-                    schema="demo",
-                    primary_key=["id"],
-                    columns=[ColumnSpec(name="id", type="bigint")],
-                )
-            },
-        )
-        ops = [
-            {"op": "create_schema", "name": "demo"},
-            {"op": "create_table", "schema": "demo", "name": "t", "primary_key": ["id"], "columns": [{"name": "id", "type": "bigint"}]},
-            {"op": "create_table", "schema": "demo", "name": "new_t", "primary_key": ["id"], "columns": [{"name": "id", "type": "bigint"}]},
-        ]
-        with patch("app.init_apply.get_live_schema", return_value=live), \
-             patch("app.init_apply.load_init_ops", return_value={"mssql": {"type": "mssql", "operations": ops}}), \
-             patch("app.exec_engine.execute_source_operations") as exe:
-            exe.return_value.executed = 1
+    def test_apply_via_api_when_flag_is_false(self):
+        init_data = {
+            "mssql": {
+                "type": "mssql",
+                "operations": [{"op": "create_schema", "name": "demo"}]
+            }
+        }
+        with patch("app.init_apply.STATE_DIR", self.state),              patch("app.init_apply.load_init_data", return_value=init_data),              patch("app.sources.source_names", return_value=[]),              patch("app.main.create_source") as mock_create,              patch("app.exec_engine.execute_source_operations") as mock_exec:
             apply_init_for_source("mssql")
-            exe.assert_called_once()
-            applied_ops = exe.call_args[0][1]
-            self.assertEqual(len(applied_ops), 1)
-            self.assertEqual(applied_ops[0].name, "new_t")
+            mock_create.assert_called_once()
+            mock_exec.assert_called_once()
+            self.assertTrue(is_init_applied("mssql"))
 
-    def test_apply_when_empty(self):
-        with patch("app.init_apply.get_live_schema", return_value=LiveSchema()), \
-             patch("app.init_apply.load_init_ops", return_value={"mssql": [{"op": "create_schema", "name": "demo"}]}), \
-             patch("app.exec_engine.execute_source_operations") as exe:
-            exe.return_value.executed = 1
-            apply_init_for_source("mssql")
-            exe.assert_called_once()
+    def test_self_healing_orphaned_resources(self):
+        mock_client = MagicMock()
+        mock_container = MagicMock(name="sydafa-mssql-mssql-source", labels={})
+        mock_container.name = "sydafa-mssql-mssql-source"
+        mock_client.containers.list.return_value = [mock_container]
+
+        mock_volume = MagicMock()
+        mock_volume.name = "sydafa-mssql-mssql-data"
+        mock_volume.attrs = {"Labels": {}}
+        mock_client.volumes.list.return_value = [mock_volume]
+
+        with patch("app.init_apply.STATE_DIR", self.state),              patch("app.container_manager._get_docker_client", return_value=mock_client):
+            check_and_heal_orphaned_state()
+            mock_container.remove.assert_called_once_with(force=True, v=True)
+            mock_volume.remove.assert_called_once_with(force=True)
 
 
 if __name__ == "__main__":

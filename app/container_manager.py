@@ -28,13 +28,13 @@ from . import source_status
 logger = logging.getLogger("sydafa.container_manager")
 
 _locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+_locks_guard = threading.RLock()
 
 
 def _source_lock(source: str) -> threading.Lock:
     with _locks_guard:
         if source not in _locks:
-            _locks[source] = threading.Lock()
+            _locks[source] = threading.RLock()
         return _locks[source]
 
 

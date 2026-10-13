@@ -19,7 +19,8 @@ JSON для sydafa API.
    Формат: `http://localhost:<host-порт>/docs`.
 
 2. **Целевая ручка API** согласно актуальному коду:
-   - данные/схема: `POST /sources/{source}/exec` (основной транзакционный);
+   - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
+   - данные/схема: `POST /sources/{source}/exec` (основной транзакционный DDL+DML);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
