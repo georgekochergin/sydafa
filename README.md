@@ -36,19 +36,19 @@ flowchart TD
         Oracle["sydafa-oracle-*-source:1521<br/>(PDB: sydafa)"]
     end
 
-    Human -->|1. POST /activate| L1_API
-    Human -->|3. JDBC Select (sydafa/sydafa)| MSSQL
-    Pipelines -->|1. POST /activate (SydafaActivateOperator)| L1_API
-    Pipelines -->|2. GET /sources/{source} (метаданные)| L2_API
-    Pipelines -->|3. JDBC Read (sydafa/sydafa)| MSSQL
-    Pipelines -->|3. JDBC Read (sydafa/sydafa)| Oracle
+    Human -- "1. POST /activate" --> L1_API
+    Human -- "3. JDBC Select (sydafa/sydafa)" --> MSSQL
+    Pipelines -- "1. POST /activate (SydafaActivateOperator)" --> L1_API
+    Pipelines -- "2. GET /sources/{source} (метаданные)" --> L2_API
+    Pipelines -- "3. JDBC Read (sydafa/sydafa)" --> MSSQL
+    Pipelines -- "3. JDBC Read (sydafa/sydafa)" --> Oracle
 
-    L1_API -->|docker run / start / stop| DockerDBMS
+    L1_API -- "docker run / start / stop" --> DockerDBMS
     L1_API <--> StateStatus
     L1_API <--> StateSecrets
     L1_API <--> StateInit
 
-    L2_API -->|транзакционный DDL/DML All-or-Nothing| DockerDBMS
+    L2_API -- "транзакционный DDL/DML All-or-Nothing" --> DockerDBMS
     L2_API <--> StateSchema
 ```
 
