@@ -63,15 +63,39 @@ fi
 
 # ==================== 2. E2E-тестирование ====================
 WORK_DIR=$(pwd)
-TEST_NET="sydafa-test-net"
-CONF_DIR="/tmp/sydafa-e2e-conf-$$"
-SRC_PREFIX="sydafa-test-"
+TEST_ID="$$"
+TEST_NET="sydafa-test-net-${TEST_ID}"
+CONF_DIR="/tmp/sydafa-e2e-conf-${TEST_ID}"
+SRC_PREFIX="sydafa-test-${TEST_ID}-"
+TEST_CONTAINER="sydafa-test-${TEST_ID}"
+TEST_STATE_VOL="sydafa-test-state-${TEST_ID}"
+
+# Свободный порт на хосте, гарантирующий отсутствие коллизий (с 8000, 8090 и параллельными запусками)
+TEST_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
 
 cleanup() {
-  echo "Очистка тестового окружения..."
-  docker rm -f sydafa-test "${SRC_PREFIX}mssql-source" "${SRC_PREFIX}oracle-source" >/dev/null 2>&1 || true
-  docker volume rm -f sydafa-test-state "${SRC_PREFIX}mssql-data" "${SRC_PREFIX}oracle-data" >/dev/null 2>&1 || true
+  echo "Очистка тестового окружения (TEST_ID=${TEST_ID})..."
+  # 1. Принудительно удаляем контейнеры СУБД с префиксом этого тестового прогона
+  local c_ids
+  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$c_ids" ]; then
+    echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+  # Удаляем тестовый API-контейнер sydafa
+  docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
+
+  # 2. Удаляем тома данных СУБД и том состояния теста
+  local v_ids
+  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$v_ids" ]; then
+    echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
+  fi
+  docker volume rm -f "$TEST_STATE_VOL" >/dev/null 2>&1 || true
+
+  # 3. Удаляем изолированную сеть
   docker network rm "$TEST_NET" >/dev/null 2>&1 || true
+
+  # 4. Удаляем временную папку конфига
   rm -rf "$CONF_DIR"
 }
 trap cleanup EXIT INT TERM
@@ -107,24 +131,24 @@ test_mssql() {
 }
 EOF
 
-  docker volume create sydafa-test-state >/dev/null
+  docker volume create "$TEST_STATE_VOL" >/dev/null
 
-  echo "Запуск сервиса sydafa для MSSQL..."
-  docker run -d --name sydafa-test \
+  echo "Запуск сервиса sydafa для MSSQL (порт ${TEST_PORT}, префикс ${SRC_PREFIX})..."
+  docker run -d --name "$TEST_CONTAINER" \
     --network "$TEST_NET" \
-    -p 8000:8000 \
+    -p "${TEST_PORT}:8000" \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
-    -v sydafa-test-state:/state \
+    -v "${TEST_STATE_VOL}:/state" \
     sydafa:latest
 
   echo "Ожидание готовности API sydafa (источник MSSQL поднимается лениво)..."
-  until curl -s http://localhost:8000/health | grep -q '"status":"ok"'; do
+  until curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; do
     sleep 2
   done
 
-  python3 test/test_e2e_source.py --url http://localhost:8000 --source mssql
+  python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source mssql
   local rc=$?
   if [ $rc -ne 0 ]; then
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -133,8 +157,18 @@ EOF
   fi
 
   echo "Остановка MSSQL и очистка перед следующей фазой..."
-  docker rm -f sydafa-test "${SRC_PREFIX}mssql-source" >/dev/null 2>&1
-  docker volume rm -f sydafa-test-state "${SRC_PREFIX}mssql-data" >/dev/null 2>&1
+  docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
+  local c_ids
+  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$c_ids" ]; then
+    echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+  local v_ids
+  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$v_ids" ]; then
+    echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
+  fi
+  docker volume rm -f "$TEST_STATE_VOL" >/dev/null 2>&1 || true
   rm -f "$CONF_DIR/init.json"
 }
 
@@ -155,24 +189,24 @@ test_oracle() {
 }
 EOF
 
-  docker volume create sydafa-test-state >/dev/null
+  docker volume create "$TEST_STATE_VOL" >/dev/null
 
-  echo "Запуск сервиса sydafa для Oracle..."
-  docker run -d --name sydafa-test \
+  echo "Запуск сервиса sydafa для Oracle (порт ${TEST_PORT}, префикс ${SRC_PREFIX})..."
+  docker run -d --name "$TEST_CONTAINER" \
     --network "$TEST_NET" \
-    -p 8000:8000 \
+    -p "${TEST_PORT}:8000" \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
-    -v sydafa-test-state:/state \
+    -v "${TEST_STATE_VOL}:/state" \
     sydafa:latest
 
   echo "Ожидание готовности API sydafa (источник Oracle поднимается лениво)..."
-  until curl -s http://localhost:8000/health | grep -q '"status":"ok"'; do
+  until curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; do
     sleep 3
   done
 
-  python3 test/test_e2e_source.py --url http://localhost:8000 --source oracle
+  python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source oracle
   local rc=$?
   if [ $rc -ne 0 ]; then
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -181,8 +215,18 @@ EOF
   fi
 
   echo "Остановка Oracle и очистка..."
-  docker rm -f sydafa-test "${SRC_PREFIX}oracle-source" >/dev/null 2>&1
-  docker volume rm -f sydafa-test-state "${SRC_PREFIX}oracle-data" >/dev/null 2>&1
+  docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
+  local c_ids
+  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$c_ids" ]; then
+    echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+  local v_ids
+  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  if [ -n "$v_ids" ]; then
+    echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
+  fi
+  docker volume rm -f "$TEST_STATE_VOL" >/dev/null 2>&1 || true
   rm -f "$CONF_DIR/init.json"
 }
 
