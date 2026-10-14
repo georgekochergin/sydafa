@@ -1,26 +1,31 @@
 ---
 name: sydafa-api
-description: Use when the user asks to generate JSON request bodies for the sydafa API (create schemas/tables, add columns, append/update/delete rows) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/exec.
+description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/exec.
 ---
 
 # sydafa API: генерация JSON-тел запросов
 
 Этот скилл переводит требования пользователя на естественном языке
-(например, «создай таблицу с двумя колонками и 10 записями») в готовый
-JSON для sydafa API.
+(например, «создай таблицу с двумя колонками и 10 записями», «удали таблицу», «переименуй колонку»)
+в готовый JSON для sydafa API.
+
+> **Каноническая спецификация операций и моделей данных:**
+> Полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
+> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`) и правил валидации
+> находится в основном файле документации проекта: [README.md](../../../README.md) (Раздел 8 «Единый метод исполнения: `POST /sources/{source}/exec`»).
 
 ## Формат ответа (обязательный)
 
 На каждую задачу выводи ровно в таком порядке:
 
 1. **Ссылка на Swagger UI** — корень документации sydafa. Порт берётся из
-   `docker-compose.yaml` sidafa (сервис `sydafa`, поле `ports` → host-порт).
+   `docker-compose.yaml` (сервис `sydafa`, поле `ports` → host-порт, например `8090`).
    Не хардкодь порт: найди его в актуальном `docker-compose.yaml` проекта.
    Формат: `http://localhost:<host-порт>/docs`.
 
 2. **Целевая ручка API** согласно актуальному коду:
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
-   - данные/схема: `POST /sources/{source}/exec` (основной транзакционный DDL+DML);
+   - данные и эволюция схемы: `POST /sources/{source}/exec` (единый транзакционный DDL + DML метод);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
@@ -30,147 +35,73 @@ JSON для sydafa API.
 ## Целевой эндпоинт: `POST /sources/{source}/exec`
 
 Принимает `{"operations": [...]}` — упорядоченный батч DDL и DML, который
-выполняется в одной транзакции (All-or-Nothing). Порядок операций имеет
-значение: сначала DDL, затем DML.
+выполняется в единой транзакции (All-or-Nothing). Порядок операций имеет
+значение: сначала DDL (создание схем, таблиц, колонок, переименования), затем DML (`append`, `update`, `delete`, `truncate`).
 
-`{source}` — имя источника (`mssql`, `oracle`).
+`{source}` — имя источника (`mssql`, `oracle` или имя инстанса, например `billing`, `crm`).
 
-## Lifecycle (инспекция)
+## Сводная матрица поддерживаемых операций (`operations[].op`)
 
-Для «подключись из DBeaver» сначала `POST /sources/{source}/activate?ttl_minutes=15`,
-затем в ответе взять объект `connection` (host, port, database, user, password, jdbc_url).
-Публичные реквизиты инспектора/читателя: пользователь `sydafa`, пароль `sydafa`. Админ СУБД снаружи недоступен.
+Детальные примеры и схемы каждого объекта описаны в `README.md` (раздел 8).
 
-## Логические типы колонок (`columns[].type`)
+### 1. DDL — Эволюция схем и таблиц (10 операций)
 
-| Тип | Назначение |
-|---|---|
-| `bigint` | целочисленный ключ / счётчик |
-| `string` | строка (MSSQL `NVARCHAR(400)`, Oracle `VARCHAR2(400)`) |
-| `decimal(p,s)` | десятичное с точностью `p` и масштабом `s` |
-| `date` | дата |
-| `timestamp` | дата+время |
-
-## Генераторы значений (`columns[].generator`)
-
-Поле `generator` содержит объект с обязательным ключом `kind`:
-
-| `kind` | Поля | Что генерирует |
+| Операция (`op`) | Обязательные поля | Назначение / Ограничение |
 |---|---|---|
-| `sequence` | — | последовательный PK (`bigint`) |
-| `faker` | `provider`: `company`, `name`, `word`, `address`, `email` | синтетическая строка |
-| `choice` | `values`: `["Retail","Corporate","VIP"]` | одно значение из списка |
-| `random_decimal` | `min`, `max` (float) | случайное число |
-| `random_date` | — | дата за последний год |
+| `create_schema` | `name` | Создание новой схемы в базе |
+| `drop_schema` | `name` | Удаление пустой схемы (ошибка, если в ней есть таблицы) |
+| `rename_schema` | `from_name`, `to_name` | Переименование схемы с переносом таблиц |
+| `create_table` | `schema`, `name`, `primary_key`, `columns`, `foreign_keys` | Создание таблицы с типами и генераторами |
+| `drop_table` | `schema`, `name` | Удаление таблицы (каскадный drop constraints) |
+| `rename_table` | `schema`, `from_name`, `to_name` | Переименование таблицы в схеме |
+| `transfer_table` | `table`, `from_schema`, `to_schema` | Перенос таблицы в другую схему |
+| `add_column` | `schema`, `table`, `column` (объект `ColumnSpec`) | Добавление новой колонки |
+| `drop_column` | `schema`, `table`, `name` | Удаление колонки (запрещено удалять колонки из PK) |
+| `rename_column` | `schema`, `table`, `from_name`, `to_name` | Переименование колонки (PK обновляется автоматически) |
 
-Генератор можно опустить (`null`) — тогда колонка останется пустой.
+### 2. DML — Данные и генерация (4 операции)
 
-## DDL-операции
+| Операция (`op`) | Обязательные поля | Опциональные поля | Назначение |
+|---|---|---|---|
+| `truncate` | `schema`, `table` | `cascade` (bool) | Очистка таблицы |
+| `append` | `schema`, `table`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
+| `update` | `schema`, `table`, `predicate`, `set` | — | Обновление строк по предикату |
+| `delete` | `schema`, `table`, `predicate` | `cascade` (bool) | Удаление строк по предикату |
 
-### create_schema
-```json
-{"op": "create_schema", "name": "demo"}
-```
+## Правила генерации JSON-батча
 
-### create_table
-```json
-{
-  "op": "create_table",
-  "schema": "demo",
-  "name": "users",
-  "primary_key": ["id"],
-  "columns": [
-    {"name": "id", "type": "bigint", "generator": {"kind": "sequence"}},
-    {"name": "email", "type": "string", "generator": {"kind": "faker", "provider": "email"}}
-  ],
-  "foreign_keys": []
-}
-```
-Поля: `schema` (уже созданная схема), `name`, `primary_key` (список колонок),
-`columns` (список), `foreign_keys` (опционально).
-Формат FK: `{"columns": ["user_id"], "ref_table": "users", "ref_columns": ["id"], "ref_schema": "demo"}`.
-
-### Остальные DDL
-- `add_column`: `{"op":"add_column","schema":"demo","table":"users","column":{"name":"age","type":"bigint"}}`
-- `drop_column`: `{"op":"drop_column","schema":"demo","table":"users","name":"age"}`
-- `rename_column`: `{"op":"rename_column","schema":"demo","table":"users","from_name":"age","to_name":"years"}`
-- `rename_table`: `{"op":"rename_table","schema":"demo","from_name":"users","to_name":"clients"}`
-- `drop_table`: `{"op":"drop_table","schema":"demo","name":"users"}`
-- `transfer_table`: `{"op":"transfer_table","table":"users","from_schema":"demo","to_schema":"core"}`
-- `rename_schema`: `{"op":"rename_schema","from_name":"demo","to_name":"core"}`
-- `drop_schema`: `{"op":"drop_schema","name":"demo"}`
-
-## DML-операции
-
-### truncate
-```json
-{"op": "truncate", "schema": "demo", "table": "orders", "cascade": true}
-```
-
-### append (наполнение «N записями»)
-```json
-{"op": "append", "schema": "demo", "table": "users", "rows": 10, "new_key_ratio": 0.0}
-```
-`rows` — сколько строк добавить (`1..100000`), `new_key_ratio` — доля новых FK
-(`0.0..1.0`). Требование «N записей» всегда реализуется через `append`, а не
-через отдельные insert.
-
-### update
-```json
-{
-  "op": "update",
-  "schema": "demo",
-  "table": "users",
-  "predicate": [{"column": "id", "operator": "=", "value": 1}],
-  "set": {"name": "VIP"}
-}
-```
-
-### delete
-```json
-{
-  "op": "delete",
-  "schema": "demo",
-  "table": "users",
-  "predicate": [{"column": "id", "operator": "=", "value": 1}],
-  "cascade": false
-}
-```
-
-Предикат — список условий `{"column","operator","value"}`; операторы:
-`=`, `!=`, `>`, `<`, `>=`, `<=`.
-
-## Правила генерации
-
-- Идентификаторы (схемы, таблицы, колонки) — латиница, цифры, `_`,
-  первым символом буква или `_` (`[A-Za-z_][A-Za-z0-9_]*`).
-- `create_schema` должно идти ДО `create_table` в том же батче — иначе
-  «схема не задекларирована».
-- `add_column` принимает поле `column` как **объект** `ColumnSpec`
-  (`{"name","type","generator"}`), а не список.
-- Наполнение таблицы = операция `append` c `"rows": N`.
-- DDL выполняется до DML; все операции — в одном списке `operations`.
+1. **Идентификаторы**: имена схем, таблиц и колонок должны удовлетворять регулярному выражению `^[A-Za-z_][A-Za-z0-9_]*$`.
+2. **Иерархия создания**:
+   - `create_schema` обязательно должно предшествовать `create_table` в этой схеме в рамках одного батча.
+   - При `transfer_table` целевая схема `to_schema` должна быть создана ранее.
+3. **Объект колонки в `add_column`**: поле `column` всегда передается как единичный объект `{"name": "...", "type": "...", "generator": {...}}`, а не массив.
+4. **Наполнение данными**: требование «добавь N записей» реализуется строго через операцию `append` с указанием `rows: N`.
+5. **Ограничения целостности**:
+   - Не удалять колонки, входящие в `primary_key`.
+   - Не удалять схему через `drop_schema`, если перед этим не были удалены (`drop_table`) или перенесены (`transfer_table`) все таблицы из нее.
+   - Предикаты в `update` и `delete` принимают список условий: `{"column": "...", "operator": "=", "value": ...}`. Допустимые операторы: `=`, `!=`, `>`, `<`, `>=`, `<=`.
 
 ## Пример полного сценария
 
-Требование: «в источнике mssql создай схему demo, таблицу users с id и email
-и добавь 10 записей».
+Требование: «в источнике billing создай схему core, таблицу accounts с id и balance, добавь 50 записей, а затем переименуй колонку balance в amount».
 
 ```json
 {
   "operations": [
-    {"op": "create_schema", "name": "demo"},
+    {"op": "create_schema", "name": "core"},
     {
       "op": "create_table",
-      "schema": "demo",
-      "name": "users",
+      "schema": "core",
+      "name": "accounts",
       "primary_key": ["id"],
       "columns": [
         {"name": "id", "type": "bigint", "generator": {"kind": "sequence"}},
-        {"name": "email", "type": "string", "generator": {"kind": "faker", "provider": "email"}}
-      ]
+        {"name": "balance", "type": "decimal(18,2)", "generator": {"kind": "random_decimal", "min": 100, "max": 10000}}
+      ],
+      "foreign_keys": []
     },
-    {"op": "append", "schema": "demo", "table": "users", "rows": 10, "new_key_ratio": 0.0}
+    {"op": "append", "schema": "core", "table": "accounts", "rows": 50, "new_key_ratio": 0.0},
+    {"op": "rename_column", "schema": "core", "table": "accounts", "from_name": "balance", "to_name": "amount"}
   ]
 }
 ```
