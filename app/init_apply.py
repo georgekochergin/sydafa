@@ -44,16 +44,14 @@ def find_init_file() -> Path | None:
 def _load_state_data() -> dict[str, Any]:
     f = _state_file()
     if not f.is_file():
-        return {"applied_sources": {}}
+        return {}
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return {"applied_sources": {}}
-        if "applied_sources" not in data:
-            data["applied_sources"] = {}
+            return {}
         return data
     except Exception:
-        return {"applied_sources": {}}
+        return {}
 
 
 def _save_state_data(data: dict[str, Any]) -> None:
@@ -61,26 +59,31 @@ def _save_state_data(data: dict[str, Any]) -> None:
     f.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def is_init_applied(source: str | None = None) -> bool:
-    """Проверяет флаг фиксации применения init.json (для источника или глобально)."""
+def is_init_applied() -> bool:
+    """Проверяет глобальный флаг фиксации применения init.json.
+    
+    Любые изменения init.json после первой успешной инициализации игнорируются.
+    """
     data = _load_state_data()
-    applied = data.get("applied_sources", {})
-    if source is not None:
-        return bool(applied.get(source, {}).get("applied") is True)
-    return bool(data.get("applied") is True or bool(applied))
+    return bool(data.get("applied") is True)
 
 
-def mark_init_applied(source: str) -> None:
-    """Фиксирует факт применения init.json в /state/init_state.json для источника."""
+def get_init_timestamp() -> str | None:
+    """Возвращает метку времени завершения первичной инициализации в формате ISO 8601 UTC."""
     data = _load_state_data()
-    applied = data.setdefault("applied_sources", {})
-    applied[source] = {
+    ts = data.get("applied_at")
+    return str(ts) if ts else None
+
+
+def mark_init_applied() -> None:
+    """Фиксирует глобальный факт применения init.json в /state/init_state.json."""
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data = {
         "applied": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "applied_at": now_iso,
     }
-    data["applied"] = True
     _save_state_data(data)
-    logger.info("Зафиксирован флаг применения init.json для источника '%s'", source)
+    logger.info("Зафиксирован флаг первичной инициализации init.json (applied=True, applied_at=%s)", now_iso)
 
 
 def load_init_data() -> dict[str, Any]:
@@ -151,15 +154,17 @@ def check_and_heal_orphaned_state() -> None:
 
 
 def apply_init_for_source(source: str) -> None:
-    """Применяет init.json строго через 2 ручки API: POST /sources и POST /sources/{source}/exec."""
-    if is_init_applied(source):
-        logger.info("init.json для источника '%s' уже применен ранее (флаг applied=True). Игнорируется.", source)
+    """Применяет DDL и DML операции из init.json для указанного источника.
+    
+    Если глобальная инициализация уже зафиксирована (applied=True), повторные операции пропускаются.
+    """
+    if is_init_applied():
+        logger.info("init.json уже применен ранее (флаг applied=True). Повторный сид для '%s' игнорируется.", source)
         return
 
     init_sources = load_init_data()
     if source not in init_sources:
         logger.info("Источник '%s' отсутствует в init.json, оставляем чистую базу.", source)
-        mark_init_applied(source)
         return
 
     val = init_sources[source]
@@ -187,4 +192,59 @@ def apply_init_for_source(source: str) -> None:
     else:
         logger.info("API Bootstrap: для источника '%s' нет операций в init.json (чистая база).", source)
 
-    mark_init_applied(source)
+    mark_init_applied()
+
+
+def seed_all_sources_on_first_startup() -> None:
+    """Выполняет eager-инициализацию всех источников из init.json при первом старте.
+    
+    Для каждого источника:
+    1. Поднимается контейнер СУБД (wake_up), выполняется bootstrap и накатываются DDL+DML.
+    2. Контейнер СУБД сразу же останавливается (deactivate) для освобождения памяти.
+    3. Фиксируется глобальный флаг applied: true и applied_at в /state/init_state.json.
+    
+    При любых последующих перезапусках сервиса или изменениях init.json процедура
+    полностью пропускается (инициализация уже произошла).
+    """
+    if is_init_applied():
+        logger.info(
+            "Первичная инициализация init.json уже была выполнена ранее (applied=True, applied_at=%s). Пропуск сидинга.",
+            get_init_timestamp(),
+        )
+        return
+
+    init_sources = load_init_data()
+    if not init_sources:
+        logger.info("Манифест init.json пуст или не содержит источников. Фиксация пустого сидинга.")
+        mark_init_applied()
+        return
+
+    logger.info(
+        "Первичный старт sydafa: обнаружено %d источников в init.json для инициализации: %s",
+        len(init_sources),
+        list(init_sources.keys()),
+    )
+
+    from . import container_manager
+
+    for src_name in init_sources.keys():
+        logger.info(">>> Инициализация источника '%s': запуск СУБД и применение схемы/данных...", src_name)
+        try:
+            container_manager.wake_up(src_name)
+        except Exception as e:
+            logger.critical("Сбой при первичной инициализации источника '%s': %s", src_name, e, exc_info=True)
+            raise
+
+        logger.info("Наполнение источника '%s' завершено. Немедленная остановка контейнера для освобождения RAM...", src_name)
+        try:
+            container_manager.deactivate(src_name)
+        except Exception as e:
+            logger.warning("Не удалось остановить контейнер источника '%s' после сидинга: %s", src_name, e)
+
+        logger.info("Контейнер источника '%s' успешно остановлен.", src_name)
+
+    mark_init_applied()
+    logger.info(
+        "Первичная инициализация всех источников завершена успешно (applied_at=%s). Все СУБД остановлены.",
+        get_init_timestamp(),
+    )
