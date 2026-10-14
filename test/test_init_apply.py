@@ -9,8 +9,10 @@ from unittest.mock import MagicMock, patch
 from app.init_apply import (
     apply_init_for_source,
     check_and_heal_orphaned_state,
+    get_init_timestamp,
     is_init_applied,
     mark_init_applied,
+    seed_all_sources_on_first_startup,
 )
 
 
@@ -25,16 +27,54 @@ class TestInitApply(unittest.TestCase):
     def test_flag_lifecycle(self):
         with patch("app.init_apply.STATE_DIR", self.state):
             self.assertFalse(is_init_applied("mssql"))
+            self.assertFalse(is_init_applied())
+            self.assertIsNone(get_init_timestamp())
             mark_init_applied("mssql")
             self.assertTrue(is_init_applied("mssql"))
-            self.assertFalse(is_init_applied("oracle"))
+            self.assertTrue(is_init_applied("oracle"))
+            self.assertTrue(is_init_applied())
+            self.assertIsNotNone(get_init_timestamp())
 
     def test_skip_when_flag_is_true(self):
-        with patch("app.init_apply.STATE_DIR", self.state),              patch("app.main.exec_source") as mock_exec,              patch("app.main.create_source") as mock_create:
+        with patch("app.init_apply.STATE_DIR", self.state), \
+             patch("app.main.exec_source") as mock_exec, \
+             patch("app.main.create_source") as mock_create:
             mark_init_applied("mssql")
             apply_init_for_source("mssql")
             mock_create.assert_not_called()
             mock_exec.assert_not_called()
+
+    def test_seed_all_sources_on_first_startup_fresh(self):
+        init_data = {
+            "mssql": {"type": "mssql", "operations": []},
+            "crm": {"type": "oracle", "operations": []},
+        }
+        with patch("app.init_apply.STATE_DIR", self.state), \
+             patch("app.init_apply.load_init_data", return_value=init_data), \
+             patch("app.container_manager.wake_up") as mock_wake, \
+             patch("app.container_manager.deactivate") as mock_deactivate:
+            seed_all_sources_on_first_startup()
+            self.assertEqual(mock_wake.call_count, 2)
+            mock_wake.assert_any_call("mssql")
+            mock_wake.assert_any_call("crm")
+            self.assertEqual(mock_deactivate.call_count, 2)
+            mock_deactivate.assert_any_call("mssql")
+            mock_deactivate.assert_any_call("crm")
+            self.assertTrue(is_init_applied())
+            self.assertIsNotNone(get_init_timestamp())
+
+    def test_seed_all_sources_on_first_startup_already_applied(self):
+        init_data = {
+            "mssql": {"type": "mssql", "operations": []},
+        }
+        with patch("app.init_apply.STATE_DIR", self.state), \
+             patch("app.init_apply.load_init_data", return_value=init_data), \
+             patch("app.container_manager.wake_up") as mock_wake, \
+             patch("app.container_manager.deactivate") as mock_deactivate:
+            mark_init_applied()
+            seed_all_sources_on_first_startup()
+            mock_wake.assert_not_called()
+            mock_deactivate.assert_not_called()
 
     def test_apply_via_api_when_flag_is_false(self):
         init_data = {

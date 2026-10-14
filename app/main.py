@@ -45,8 +45,13 @@ async def lifespan(app: FastAPI):
         from . import init_apply
         init_apply.check_and_heal_orphaned_state()
         sources.load_sources()
+        init_apply.seed_all_sources_on_first_startup()
         _is_ready = True
-        logger.info("sydafa готова (источники поднимаются лениво): %s", sources.source_names())
+        logger.info(
+            "sydafa готова (первичный сид завершен, СУБД остановлены в простое, initialized_at=%s): %s",
+            init_apply.get_init_timestamp(),
+            sources.source_names(),
+        )
         watcher = asyncio.create_task(_idle_watcher())
     except Exception as e:
         logger.critical("Критическая ошибка при инициализации sydafa: %s", e, exc_info=True)
@@ -69,10 +74,16 @@ app = FastAPI(
 
 @app.get("/health")
 def healthcheck(response: Response):
+    from . import init_apply
     if not _is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "initializing"}
-    return {"status": "ok", "database": SYDAFA_DB, "sources": sources.source_names()}
+        return {"status": "initializing", "detail": "Инициализация сервиса и первичный сид источников..."}
+    return {
+        "status": "ok",
+        "database": SYDAFA_DB,
+        "sources": sources.source_names(),
+        "initialized_at": init_apply.get_init_timestamp(),
+    }
 
 
 def _assert_source(source: str) -> None:

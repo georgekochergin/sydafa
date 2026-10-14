@@ -19,13 +19,16 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(resp.status_code, 503)
 
     def test_health_ready(self):
-        with patch("app.main._is_ready", True), patch("app.sources.source_names", return_value=["mssql", "oracle"]):
+        with patch("app.main._is_ready", True), \
+             patch("app.sources.source_names", return_value=["mssql", "oracle"]), \
+             patch("app.init_apply.get_init_timestamp", return_value="2026-10-14T12:00:00Z"):
             resp = self.client.get("/health")
             self.assertEqual(resp.status_code, 200)
             data = resp.json()
             self.assertEqual(data["status"], "ok")
             self.assertEqual(data["database"], "sydafa")
             self.assertEqual(data["sources"], ["mssql", "oracle"])
+            self.assertEqual(data["initialized_at"], "2026-10-14T12:00:00Z")
 
     def test_get_source_info(self):
         fake_cfg = SourceConfig(type="mssql", host="mssql-source", port=1433, reader="reader")
