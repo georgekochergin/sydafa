@@ -18,11 +18,12 @@ JSON для sydafa API.
    Не хардкодь порт: найди его в актуальном `docker-compose.yaml` проекта.
    Формат: `http://localhost:<host-порт>/docs`.
 
-2. **Целевая ручка API** согласно актуальному коду sydafa — основной метод
-   исполнения: `POST /sources/{source}/exec`.
-   (Альтернативы: `POST /sources/{source}/schema/evolve` для чистого DDL и
-   `POST /tables/{source}/{schema}/{table}/append|update|delete` для точечного
-   DML — указывай их только когда они очевидно уместнее, иначе всегда `exec`.)
+2. **Целевая ручка API** согласно актуальному коду:
+   - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
+   - данные/схема: `POST /sources/{source}/exec` (основной транзакционный DDL+DML);
+   - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
+     (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
+     остановка — `POST /sources/{source}/deactivate`.
 
 3. **JSON-тело для вставки** в Swagger UI.
 
@@ -32,8 +33,13 @@ JSON для sydafa API.
 выполняется в одной транзакции (All-or-Nothing). Порядок операций имеет
 значение: сначала DDL, затем DML.
 
-`{source}` — имя источника из `sources/*.yaml` (`mssql`, `oracle`). Если
-пользователь не задал источник — уточни или подставь плейсхолдер `{source}`.
+`{source}` — имя источника (`mssql`, `oracle`).
+
+## Lifecycle (инспекция)
+
+Для «подключись из DBeaver» сначала `POST /sources/{source}/activate?ttl_minutes=15`,
+затем в ответе взять объект `connection` (host, port, database, user, password, jdbc_url).
+Публичные реквизиты инспектора/читателя: пользователь `sydafa`, пароль `sydafa`. Админ СУБД снаружи недоступен.
 
 ## Логические типы колонок (`columns[].type`)
 

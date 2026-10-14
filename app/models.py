@@ -12,10 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class SourceConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    name: str = ""
     type: Literal["mssql", "oracle"]
-    host: str
-    port: int
-    reader: str = "reader"
+    host: str = ""
+    port: int = 1433
+    external_port: int | None = None
+    reader: str = "sydafa"
 
 
 # --- Генераторы синтетических данных ---
@@ -370,6 +372,21 @@ class ExecRequest(BaseModel):
     operations: list[ExecOperation]
 
 
+class SourceInitSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["mssql", "oracle"]
+    operations: list[ExecOperation] = Field(default_factory=list)
+
+
+class CreateSourceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    type: Literal["mssql", "oracle"]
+    external_port: int | None = None
+
+
 class ExecResult(BaseModel):
     status: str = "ok"
     executed: int
@@ -411,3 +428,29 @@ class SourceInfo(BaseModel):
     reader: str
     schemas: list[str]
     tables: list[TableRef]
+
+
+class ConnectionDetails(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["mssql", "oracle"]
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    jdbc_url: str
+
+
+class SourceLifecycleStatus(BaseModel):
+    source: str
+    state: str
+    last_used: str | None = None
+    activated_until: str | None = Field(
+        default=None,
+        description="Время окончания активности контейнера в формате ISO 8601 UTC (например, 2026-10-14T12:15:00Z)",
+    )
+    ttl_minutes: int
+    connection: ConnectionDetails | None = None
+    host_port: int | None = None
+    published: bool = False
