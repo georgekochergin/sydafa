@@ -59,50 +59,31 @@ def _save_state_data(data: dict[str, Any]) -> None:
     f.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def is_init_applied(source: str | None = None) -> bool:
+def is_init_applied() -> bool:
     """Проверяет глобальный флаг фиксации применения init.json.
     
     Любые изменения init.json после первой успешной инициализации игнорируются.
     """
     data = _load_state_data()
-    if data.get("applied") is True:
-        return True
-    # Обратная совместимость с по-источниковым форматом applied_sources
-    applied_sources = data.get("applied_sources", {})
-    if source is not None and isinstance(applied_sources, dict):
-        return bool(applied_sources.get(source, {}).get("applied") is True)
-    return bool(applied_sources)
+    return bool(data.get("applied") is True)
 
 
 def get_init_timestamp() -> str | None:
     """Возвращает метку времени завершения первичной инициализации в формате ISO 8601 UTC."""
     data = _load_state_data()
     ts = data.get("applied_at")
-    if ts:
-        return str(ts)
-    applied_sources = data.get("applied_sources", {})
-    if isinstance(applied_sources, dict) and applied_sources:
-        for s_info in applied_sources.values():
-            if isinstance(s_info, dict) and s_info.get("timestamp"):
-                return str(s_info["timestamp"])
-    return None
+    return str(ts) if ts else None
 
 
-def mark_init_applied(source: str | None = None) -> None:
+def mark_init_applied() -> None:
     """Фиксирует глобальный факт применения init.json в /state/init_state.json."""
-    data = _load_state_data()
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    data["applied"] = True
-    if not data.get("applied_at"):
-        data["applied_at"] = now_iso
-    if source is not None:
-        applied = data.setdefault("applied_sources", {})
-        applied[source] = {
-            "applied": True,
-            "timestamp": now_iso,
-        }
+    data = {
+        "applied": True,
+        "applied_at": now_iso,
+    }
     _save_state_data(data)
-    logger.info("Зафиксирован флаг первичной инициализации init.json (applied=True, applied_at=%s)", data.get("applied_at"))
+    logger.info("Зафиксирован флаг первичной инициализации init.json (applied=True, applied_at=%s)", now_iso)
 
 
 def load_init_data() -> dict[str, Any]:
@@ -211,7 +192,7 @@ def apply_init_for_source(source: str) -> None:
     else:
         logger.info("API Bootstrap: для источника '%s' нет операций в init.json (чистая база).", source)
 
-    mark_init_applied(source)
+    mark_init_applied()
 
 
 def seed_all_sources_on_first_startup() -> None:

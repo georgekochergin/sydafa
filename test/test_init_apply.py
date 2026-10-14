@@ -26,12 +26,9 @@ class TestInitApply(unittest.TestCase):
 
     def test_flag_lifecycle(self):
         with patch("app.init_apply.STATE_DIR", self.state):
-            self.assertFalse(is_init_applied("mssql"))
             self.assertFalse(is_init_applied())
             self.assertIsNone(get_init_timestamp())
-            mark_init_applied("mssql")
-            self.assertTrue(is_init_applied("mssql"))
-            self.assertTrue(is_init_applied("oracle"))
+            mark_init_applied()
             self.assertTrue(is_init_applied())
             self.assertIsNotNone(get_init_timestamp())
 
@@ -39,7 +36,7 @@ class TestInitApply(unittest.TestCase):
         with patch("app.init_apply.STATE_DIR", self.state), \
              patch("app.main.exec_source") as mock_exec, \
              patch("app.main.create_source") as mock_create:
-            mark_init_applied("mssql")
+            mark_init_applied()
             apply_init_for_source("mssql")
             mock_create.assert_not_called()
             mock_exec.assert_not_called()
@@ -87,7 +84,7 @@ class TestInitApply(unittest.TestCase):
             apply_init_for_source("mssql")
             mock_create.assert_called_once()
             mock_exec.assert_called_once()
-            self.assertTrue(is_init_applied("mssql"))
+            self.assertTrue(is_init_applied())
 
     def test_self_healing_orphaned_resources(self):
         mock_client = MagicMock()
