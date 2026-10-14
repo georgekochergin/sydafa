@@ -439,7 +439,6 @@ class ConnectionDetails(BaseModel):
     database: str
     user: str
     password: str
-    parameters: dict[str, str] = Field(default_factory=dict)
     jdbc_url: str
 
 
@@ -447,7 +446,10 @@ class SourceLifecycleStatus(BaseModel):
     source: str
     state: str
     last_used: str | None = None
-    activated_until: str | None = None
+    activated_until: str | None = Field(
+        default=None,
+        description="Время окончания активности контейнера в формате ISO 8601 UTC (например, 2026-10-14T12:15:00Z)",
+    )
     ttl_minutes: int
     connection: ConnectionDetails | None = None
     host_port: int | None = None

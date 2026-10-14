@@ -85,7 +85,7 @@ if ! docker image inspect sydafa:latest >/dev/null 2>&1; then
 fi
 
 docker network create "$TEST_NET" >/dev/null 2>&1
-mkdir -p "$CONF_DIR/sources"
+mkdir -p "$CONF_DIR"
 
 TOTAL_PASS=0
 TOTAL_FAIL=0
@@ -96,11 +96,15 @@ test_mssql() {
   echo ">>> ФАЗА: Тестирование источника MSSQL <<<"
   echo "=================================================="
 
-  cat << 'EOF' > "$CONF_DIR/sources/mssql.yaml"
-type: mssql
-host: mssql-source
-port: 1433
-reader: reader
+  cat << 'EOF' > "$CONF_DIR/init.json"
+{
+  "sources": {
+    "mssql": {
+      "type": "mssql",
+      "operations": []
+    }
+  }
+}
 EOF
 
   docker volume create sydafa-test-state >/dev/null
@@ -111,7 +115,7 @@ EOF
     -p 8000:8000 \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$CONF_DIR:/app/config:ro" \
+    -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
     -v sydafa-test-state:/state \
     sydafa:latest
 
@@ -131,7 +135,7 @@ EOF
   echo "Остановка MSSQL и очистка перед следующей фазой..."
   docker rm -f sydafa-test "${SRC_PREFIX}mssql-source" >/dev/null 2>&1
   docker volume rm -f sydafa-test-state "${SRC_PREFIX}mssql-data" >/dev/null 2>&1
-  rm -f "$CONF_DIR/sources/mssql.yaml"
+  rm -f "$CONF_DIR/init.json"
 }
 
 test_oracle() {
@@ -140,11 +144,15 @@ test_oracle() {
   echo ">>> ФАЗА: Тестирование источника Oracle <<<"
   echo "=================================================="
 
-  cat << 'EOF' > "$CONF_DIR/sources/oracle.yaml"
-type: oracle
-host: oracle-source
-port: 1521
-reader: reader
+  cat << 'EOF' > "$CONF_DIR/init.json"
+{
+  "sources": {
+    "oracle": {
+      "type": "oracle",
+      "operations": []
+    }
+  }
+}
 EOF
 
   docker volume create sydafa-test-state >/dev/null
@@ -155,7 +163,7 @@ EOF
     -p 8000:8000 \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$CONF_DIR:/app/config:ro" \
+    -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
     -v sydafa-test-state:/state \
     sydafa:latest
 
@@ -175,7 +183,7 @@ EOF
   echo "Остановка Oracle и очистка..."
   docker rm -f sydafa-test "${SRC_PREFIX}oracle-source" >/dev/null 2>&1
   docker volume rm -f sydafa-test-state "${SRC_PREFIX}oracle-data" >/dev/null 2>&1
-  rm -f "$CONF_DIR/sources/oracle.yaml"
+  rm -f "$CONF_DIR/init.json"
 }
 
 if [ -z "$SELECTED_SOURCE" ] || [ "$SELECTED_SOURCE" = "mssql" ]; then

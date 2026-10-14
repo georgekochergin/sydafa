@@ -38,7 +38,7 @@ JSON для sydafa API.
 ## Lifecycle (инспекция)
 
 Для «подключись из DBeaver» сначала `POST /sources/{source}/activate?ttl_minutes=15`,
-затем в ответе взять объект `connection` (host, port, database, user, password, parameters).
+затем в ответе взять объект `connection` (host, port, database, user, password, jdbc_url).
 Публичные реквизиты инспектора/читателя: пользователь `sydafa`, пароль `sydafa`. Админ СУБД снаружи недоступен.
 
 ## Логические типы колонок (`columns[].type`)

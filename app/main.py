@@ -134,7 +134,6 @@ def delete_source(source: str):
 def get_source_info(source: str, request: Request):
     _assert_source(source)
     request_host = request.url.hostname if request else None
-    _wake(source, request_host=request_host)
     cfg = sources.get_source(source)
     live = schema_state.get_live_schema(source)
     tables_refs = [TableRef(schema=t.schema_, name=t.name) for t in live.tables.values()]
@@ -153,10 +152,8 @@ def get_source_info(source: str, request: Request):
 
 
 @app.get("/sources/{source}/schema")
-def get_source_schema(source: str, request: Request):
+def get_source_schema(source: str):
     _assert_source(source)
-    request_host = request.url.hostname if request else None
-    _wake(source, request_host=request_host)
     return schema_state.get_live_schema(source).model_dump(by_alias=True)
 
 
@@ -176,8 +173,10 @@ def activate_source(
     ttl_minutes: int | None = Query(default=None, description="Время жизни в минутах (макс. SYDAFA_MAX_TTL_MINUTES, дефолт 15)"),
 ):
     _assert_source(source)
-    if ttl_minutes is None or ttl_minutes > MAX_TTL_MINUTES or ttl_minutes <= 0:
+    if ttl_minutes is None or ttl_minutes <= 0:
         effective_ttl = DEFAULT_TTL_MINUTES
+    elif ttl_minutes > MAX_TTL_MINUTES:
+        effective_ttl = MAX_TTL_MINUTES
     else:
         effective_ttl = ttl_minutes
     request_host = request.url.hostname if request else None

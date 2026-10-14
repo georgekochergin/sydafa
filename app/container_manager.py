@@ -160,12 +160,9 @@ def build_connection_details(
     port = config.external_port if is_external else config.port
     host = "localhost" if is_external else (request_host or config.host)
 
-    params: dict[str, str] = {}
     if config.type == "mssql":
-        params = {"trustServerCertificate": "true", "encrypt": "false"}
         jdbc_url = f"jdbc:sqlserver://{host}:{port};databaseName={SYDAFA_DB};trustServerCertificate=true;encrypt=false"
     elif config.type == "oracle":
-        params = {"service_name": SYDAFA_DB}
         jdbc_url = f"jdbc:oracle:thin:@//{host}:{port}/{SYDAFA_DB}"
     else:
         jdbc_url = f"jdbc:{config.type}://{host}:{port}/{SYDAFA_DB}"
@@ -177,7 +174,6 @@ def build_connection_details(
         database=SYDAFA_DB,
         user=READER_USER,
         password=READER_PASSWORD,
-        parameters=params,
         jdbc_url=jdbc_url,
     )
 

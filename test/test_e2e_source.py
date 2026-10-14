@@ -71,11 +71,21 @@ def run_source_e2e(base_url: str, source: str):
     if not ok:
         return
 
-    # 2. Интроспекция источника
+    # 2. Интроспекция источника (Safe GET)
     code, meta = http("GET", f"{base_url}/sources/{source}")
     check(f"{source}: GET /sources/{source}", code, 200)
     check(f"{source}: database name is sydafa", meta.get("database"), "sydafa")
-    check(f"{source}: reader username is reader", meta.get("reader"), "reader")
+    check(f"{source}: reader username is sydafa", meta.get("reader"), "sydafa")
+
+    # 2.1. Жизненный цикл (POST /activate с капингом TTL и проверка connection)
+    code, act = http("POST", f"{base_url}/sources/{source}/activate?ttl_minutes=45")
+    check(f"{source}: POST /activate", code, 200)
+    check(f"{source}: activate state is running", act.get("state"), "running")
+    check(f"{source}: TTL capped to 30 min", act.get("ttl_minutes"), 30)
+    check(f"{source}: activated_until ends with Z (UTC)", str(act.get("activated_until")).endswith("Z"), True)
+    conn = act.get("connection", {})
+    check(f"{source}: connection has jdbc_url", "jdbc_url" in conn, True)
+    check(f"{source}: parameters omitted from connection", "parameters" not in conn, True)
 
     # 3. DDL: Создание схемы и связанных таблиц с FK через POST /exec
     schema_name = "e2e_demo"
@@ -224,8 +234,9 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: failing batch rejected -> 422", code, 422)
 
     # Проверка отката: temp_probe отсутствует
-    code, tbl_meta = http("GET", f"{base_url}/tables/{source}/{schema_name}/items")
-    cols = [c["name"] for c in tbl_meta.get("columns", [])] if isinstance(tbl_meta, dict) else []
+    code, schema_meta = http("GET", f"{base_url}/sources/{source}/schema")
+    table_obj = schema_meta.get("tables", {}).get(f"{schema_name}.items", {}) if isinstance(schema_meta, dict) else {}
+    cols = [c["name"] for c in table_obj.get("columns", [])]
     check(f"{source}: all-or-nothing rollback (temp_probe absent)", "temp_probe" in cols, False)
     check(f"{source}: score column present from step 8", "score" in cols, True)
 

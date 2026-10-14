@@ -59,8 +59,8 @@ def mark_running(
     published: bool,
     connection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ts = now_utc().isoformat()
-    until = datetime.fromtimestamp(now_utc().timestamp() + ttl_minutes * 60, tz=timezone.utc).isoformat()
+    ts = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = datetime.fromtimestamp(now_utc().timestamp() + ttl_minutes * 60, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     status = load_status(source)
     status.update(
         {
