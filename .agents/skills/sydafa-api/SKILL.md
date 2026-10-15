@@ -66,8 +66,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
 |---|---|---|---|
 | `truncate` | `schema`, `table` | `cascade` (bool) | Очистка таблицы |
 | `append` | `schema`, `table`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
-| `update` | `schema`, `table`, `predicate`, `set` | — | Обновление строк по предикату |
-| `delete` | `schema`, `table`, `predicate` | `cascade` (bool) | Удаление строк по предикату |
+| `update` | `schema`, `table`, `set` | `predicate` (list), `random_rows` (int) | Обновление строк по предикату и/или N случайных строк |
+| `delete` | `schema`, `table` | `predicate` (list), `cascade` (bool), `random_rows` (int) | Удаление строк по предикату и/или N случайных строк |
 
 ## Системные колонки и таблицы аудита (_batch_id, _exec_batch_id, _upd_, _del_)
 
@@ -105,7 +105,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
 5. **Ограничения целостности**:
    - Не удалять колонки, входящие в `primary_key`.
    - Не удалять схему через `drop_schema`, если перед этим не были удалены (`drop_table`) или перенесены (`transfer_table`) все таблицы из нее.
-   - Предикаты в `update` и `delete` принимают список условий: `{"column": "...", "operator": "=", "value": ...}`. Допустимые операторы: `=`, `!=`, `>`, `<`, `>=`, `<=`.
+   - Предикаты в `update` и `delete` принимают список условий: `{"column": "...", "operator": "=", "value": ...}`. Допустимые операторы: `=`, `!=`, `>`, `<`, `>=`, `<=`. Если предикат опущен или пуст, операция применяется ко всем строкам таблицы (или ко всей таблице с учетом `random_rows`).
+   - Опция `random_rows: N` в `update` и `delete` задаёт количество случайных строк для мутации. Если $N$ превышает доступное число строк, обрабатываются все строки. Работает для любых таблиц, включая таблицы без первичного ключа.
 
 ## Пример полного сценария
 

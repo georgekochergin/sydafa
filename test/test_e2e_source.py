@@ -61,7 +61,9 @@ def _sydafa_container(prefix: str) -> str:
 
 def _tbl(source: str, schema: str, name: str) -> str:
     """Квалифицированное имя таблицы для диалекта источника."""
-    return f"[{schema}].[{name}]" if source == "mssql" else f'{schema}."{name}"'
+    if source == "mssql":
+        return f"[{schema}].[{name}]"
+    return f'{schema}."{name}"' if name.startswith("_") else f"{schema}.{name}"
 
 
 def _col(source: str, name: str) -> str:
@@ -236,6 +238,31 @@ def run_source_e2e(base_url: str, source: str):
             check(f"{source}: _del snapshot has _exec_batch_id > 0", int(del_exec) > 0, True)
         except ValueError:
             check(f"{source}: _del snapshot has _exec_batch_id > 0", False, True)
+
+    # 6.2. DML: Update N random rows (с опцией random_rows без предиката)
+    random_update_ops = [
+        {
+            "op": "update",
+            "schema": schema_name,
+            "table": "items",
+            "set": {"title": "RandomlyUpdated"},
+            "random_rows": 2,
+        }
+    ]
+    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_update_ops})
+    check(f"{source}: exec random_rows update", code, 200)
+
+    # 6.3. DML: Delete N random rows (с опцией random_rows без предиката)
+    random_delete_ops = [
+        {
+            "op": "delete",
+            "schema": schema_name,
+            "table": "items",
+            "random_rows": 2,
+        }
+    ]
+    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_delete_ops})
+    check(f"{source}: exec random_rows delete", code, 200)
 
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409
