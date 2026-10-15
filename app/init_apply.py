@@ -115,12 +115,21 @@ def check_and_heal_orphaned_state() -> None:
         logger.warning("Не удалось подключиться к Docker для проверки self-healing: %s", e)
         return
 
+    prefix = os.environ.get("SYDAFA_CONTAINER_PREFIX", "")
+    p = (prefix if prefix.endswith("-") else f"{prefix}-") if prefix else ""
+    target_c_prefix = f"sydafa-{p}src-"
+    target_v_prefix = f"sydafa-{p}data-"
+
     healed_containers = 0
     try:
         for c in client.containers.list(all=True):
             c_name = c.name or ""
             labels = c.labels or {}
-            if ("sydafa" in c_name and "-source" in c_name) or labels.get("sydafa.managed") == "true":
+            # Удаляем контейнеры текущего пространства имен (или старые legacy контейнеры, если префикс пуст)
+            is_match = c_name.startswith(target_c_prefix)
+            if not prefix:
+                is_match = is_match or ("sydafa" in c_name and "-source" in c_name)
+            if is_match or (labels.get("sydafa.managed") == "true" and (not prefix or labels.get("sydafa.prefix") == prefix)):
                 logger.warning("Self-Healing: удаление осиротевшего контейнера %s (пустой /state)", c_name)
                 try:
                     c.remove(force=True, v=True)
@@ -135,7 +144,11 @@ def check_and_heal_orphaned_state() -> None:
         for v in client.volumes.list():
             v_name = v.name or ""
             labels = v.attrs.get("Labels") or {}
-            if ("sydafa" in v_name and "-data" in v_name) or labels.get("sydafa.managed") == "true":
+            # Удаляем тома текущего пространства имен (или старые legacy тома, если префикс пуст)
+            is_match = v_name.startswith(target_v_prefix)
+            if not prefix:
+                is_match = is_match or ("sydafa" in v_name and "-data" in v_name)
+            if is_match or (labels.get("sydafa.managed") == "true" and (not prefix or labels.get("sydafa.prefix") == prefix)):
                 logger.warning("Self-Healing: удаление осиротевшего тома %s (пустой /state)", v_name)
                 try:
                     v.remove(force=True)

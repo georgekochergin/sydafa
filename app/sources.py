@@ -76,7 +76,7 @@ def _load_sources_from_init() -> dict[str, SourceConfig]:
                 used_ext_ports[ext_port] = instance_name
 
         int_port = DEFAULT_INTERNAL_PORTS[src_type]
-        host = f"sydafa-{src_type}-{instance_name}-source"
+        host = f"sydafa-src-{src_type}-{instance_name}"
 
         loaded[instance_name] = SourceConfig(
             name=instance_name,
@@ -102,7 +102,7 @@ def register_source(name: str, src_type: str, external_port: int | None = None) 
         raise ValueError(f"Неподдерживаемый тип СУБД '{src_type}'")
 
     int_port = DEFAULT_INTERNAL_PORTS[src_type]
-    host = f"sydafa-{src_type}-{name}-source"
+    host = f"sydafa-src-{src_type}-{name}"
 
     cfg = SourceConfig(
         name=name,

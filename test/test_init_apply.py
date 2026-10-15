@@ -88,12 +88,12 @@ class TestInitApply(unittest.TestCase):
 
     def test_self_healing_orphaned_resources(self):
         mock_client = MagicMock()
-        mock_container = MagicMock(name="sydafa-mssql-mssql-source", labels={})
-        mock_container.name = "sydafa-mssql-mssql-source"
+        mock_container = MagicMock(name="sydafa-src-mssql-mssql", labels={})
+        mock_container.name = "sydafa-src-mssql-mssql"
         mock_client.containers.list.return_value = [mock_container]
 
         mock_volume = MagicMock()
-        mock_volume.name = "sydafa-mssql-mssql-data"
+        mock_volume.name = "sydafa-data-mssql-mssql"
         mock_volume.attrs = {"Labels": {}}
         mock_client.volumes.list.return_value = [mock_volume]
 

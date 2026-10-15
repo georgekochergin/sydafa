@@ -10,16 +10,22 @@ from app.models import SourceConfig
 
 class TestContainerNames(unittest.TestCase):
     def test_default_names(self):
-        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
+        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-src-mssql-billing", port=1433)
         with patch("app.container_manager.CONTAINER_PREFIX", ""):
-            self.assertEqual(container_name_for(cfg), "sydafa-mssql-billing-source")
-            self.assertEqual(volume_name_for(cfg), "sydafa-mssql-billing-data")
+            self.assertEqual(container_name_for(cfg), "sydafa-src-mssql-billing")
+            self.assertEqual(volume_name_for(cfg), "sydafa-data-mssql-billing")
 
     def test_prefixed_names(self):
-        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
-        with patch("app.container_manager.CONTAINER_PREFIX", "sydafa-test-"):
-            self.assertEqual(container_name_for(cfg), "sydafa-test-mssql-billing-source")
-            self.assertEqual(volume_name_for(cfg), "sydafa-test-mssql-billing-data")
+        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-src-mssql-billing", port=1433)
+        with patch("app.container_manager.CONTAINER_PREFIX", "inst1-"):
+            self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
+            self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
+
+    def test_prefixed_names_without_trailing_dash(self):
+        cfg = SourceConfig(name="billing", type="mssql", host="sydafa-src-mssql-billing", port=1433)
+        with patch("app.container_manager.CONTAINER_PREFIX", "inst1"):
+            self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
+            self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 > **Каноническая спецификация операций и моделей данных:**
 > Полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
 > параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`) и правил валидации
-> находится в основном файле документации проекта: [README.md](../../../README.md) (Раздел 8 «Единый метод исполнения: `POST /sources/{source}/exec`»).
+> находится в основном файле документации проекта: [README.md](../../../README.md) (Раздел 9 «Единый метод исполнения: `POST /sources/{source}/exec`»).
 
 ## Формат ответа (обязательный)
 
@@ -42,7 +42,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 ## Сводная матрица поддерживаемых операций (`operations[].op`)
 
-Детальные примеры и схемы каждого объекта описаны в `README.md` (раздел 8).
+Детальные примеры и схемы каждого объекта описаны в `README.md` (раздел 9).
 
 ### 1. DDL — Эволюция схем и таблиц (10 операций)
 
