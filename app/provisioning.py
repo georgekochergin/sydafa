@@ -160,7 +160,13 @@ def provision_oracle(source_name: str, config: SourceConfig) -> None:
         else:
             if row[1] == "MOUNTED":
                 logger.info("Открытие PDB '%s'...", SYDAFA_DB)
-                cur.execute(f"ALTER PLUGGABLE DATABASE {SYDAFA_DB} OPEN")
+                try:
+                    cur.execute(f"ALTER PLUGGABLE DATABASE {SYDAFA_DB} OPEN")
+                except Exception as e:
+                    if "65054" in str(e) or "already open" in str(e).lower():
+                        logger.info("PDB '%s' уже находится в процессе открытия (%s)", SYDAFA_DB, e)
+                    else:
+                        raise
     finally:
         conn.close()
 

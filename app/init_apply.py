@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from .constants import STATE_DIR
+from .constants import DEFAULT_TTL_MINUTES, STATE_DIR
 from .models import ExecOperation, ExecRequest
 
 logger = logging.getLogger("sydafa.init_apply")
@@ -292,7 +292,7 @@ def seed_all_sources_on_first_startup() -> None:
     for src_name in sources_to_seed:
         logger.info(">>> Первичный сид источника '%s': запуск СУБД и применение схемы/данных...", src_name)
         try:
-            container_manager.wake_up(src_name)
+            container_manager.wake_up(src_name, ttl_minutes=DEFAULT_TTL_MINUTES)
         except Exception as e:
             logger.critical("Сбой при первичной инициализации источника '%s': %s", src_name, e, exc_info=True)
             raise
@@ -339,7 +339,7 @@ def reinit_source(source_name: str) -> dict[str, Any]:
     raw_ops = src_spec.get("operations", []) if isinstance(src_spec, dict) else []
 
     logger.info("Реинициализация '%s': запуск чистой базы и применение %d операций...", source_name, len(raw_ops))
-    container_manager.wake_up(source_name)
+    container_manager.wake_up(source_name, ttl_minutes=DEFAULT_TTL_MINUTES)
 
     logger.info("Реинициализация '%s': глушение контейнера для возврата 0 MB RAM...", source_name)
     container_manager.deactivate(source_name)

@@ -1,6 +1,9 @@
 """Тесты эндпоинтов FastAPI sydafa с использованием TestClient."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
@@ -164,6 +167,28 @@ class TestSydafaAPI(unittest.TestCase):
             resp = self.client.get("/sources")
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json(), {"sources": ["billing", "crm"]})
+
+    def test_lifespan_startup_and_seed(self):
+        """Интеграционный тест: запуск lifespan FastAPI с первичным сидингом источников."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            cfg_file = tmp_path / "sources.json"
+            cfg_file.write_text(json.dumps({
+                "sources": {
+                    "mssql": {"type": "mssql", "operations": []}
+                }
+            }))
+            with patch.dict("os.environ", {"SYDAFA_SOURCES_FILE": str(cfg_file)}), \
+                 patch("app.init_apply.STATE_DIR", tmp_path), \
+                 patch("app.container_manager.wake_up", autospec=True) as mock_wake, \
+                 patch("app.container_manager.deactivate", autospec=True) as mock_deact:
+                with TestClient(app) as client:
+                    resp = client.get("/health")
+                    self.assertEqual(resp.status_code, 200)
+                    self.assertEqual(resp.json()["status"], "ok")
+                    self.assertIn("mssql", resp.json()["sources"])
+                    mock_wake.assert_called_once()
+                    mock_deact.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,12 @@ class TestContainerNames(unittest.TestCase):
                     self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
                     self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
 
+    def test_prefix_starting_with_sydafa_does_not_duplicate(self):
+        cfg = SourceConfig(name="db1", type="oracle", host="sydafa-src-oracle-db1", port=1521)
+        with patch("app.container_manager.CONTAINER_PREFIX", "sydafa-test-"):
+            self.assertEqual(container_name_for(cfg), "sydafa-test-src-oracle-db1")
+            self.assertEqual(volume_name_for(cfg), "sydafa-test-data-oracle-db1")
+
     def test_source_name_with_spaces_or_dashes(self):
         cfg = SourceConfig(name="  -billing-  ", type="mssql", host="sydafa-src-mssql-billing", port=1433)
         with patch("app.container_manager.CONTAINER_PREFIX", "inst1-"):

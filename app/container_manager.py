@@ -52,9 +52,13 @@ def sanitize_user_token(token: str | None) -> str:
 def container_name_for(config: SourceConfig) -> str:
     prefix = sanitize_user_token(CONTAINER_PREFIX)
     src_name = sanitize_user_token(config.name)
-    parts = ["sydafa"]
-    if prefix:
+    parts: list[str] = []
+    if prefix.startswith("sydafa"):
         parts.append(prefix)
+    else:
+        parts.append("sydafa")
+        if prefix:
+            parts.append(prefix)
     parts.extend(["src", config.type, src_name])
     return "-".join(parts)
 
@@ -62,9 +66,13 @@ def container_name_for(config: SourceConfig) -> str:
 def volume_name_for(config: SourceConfig) -> str:
     prefix = sanitize_user_token(CONTAINER_PREFIX)
     src_name = sanitize_user_token(config.name)
-    parts = ["sydafa"]
-    if prefix:
+    parts: list[str] = []
+    if prefix.startswith("sydafa"):
         parts.append(prefix)
+    else:
+        parts.append("sydafa")
+        if prefix:
+            parts.append(prefix)
     parts.extend(["data", config.type, src_name])
     return "-".join(parts)
 
@@ -102,9 +110,11 @@ def _wait_for_port(host: str, port: int, timeout: int = 120) -> None:
 
 def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
     """Готовность: сначала dba_user (после provisioning), иначе bootstrap sa/SYS."""
+    from . import init_apply
     secrets = get_secrets()
     deadline = time.time() + timeout
     last_err: Exception | None = None
+    is_init = init_apply.is_source_initialized(config.name)
 
     while time.time() < deadline:
         try:
@@ -123,16 +133,17 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     return
                 except Exception as e:
                     last_err = e
-                    conn = pymssql.connect(
-                        server=config.host,
-                        port=config.port,
-                        user="sa",
-                        password=secrets.mssql_sa_password,
-                        database="master",
-                        login_timeout=3,
-                    )
-                    conn.close()
-                    return
+                    if not is_init:
+                        conn = pymssql.connect(
+                            server=config.host,
+                            port=config.port,
+                            user="sa",
+                            password=secrets.mssql_sa_password,
+                            database="master",
+                            login_timeout=3,
+                        )
+                        conn.close()
+                        return
             elif config.type == "oracle":
                 import oracledb
                 try:
@@ -142,24 +153,25 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     return
                 except Exception as e:
                     last_err = e
-                    dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
-                    conn = oracledb.connect(
-                        user="SYS",
-                        password=secrets.oracle_sys_password,
-                        dsn=dsn,
-                        mode=oracledb.AUTH_MODE_SYSDBA,
-                    )
-                    cur = conn.cursor()
-                    cur.execute("SELECT open_mode FROM v$database")
-                    row = cur.fetchone()
-                    conn.close()
-                    if row and row[0] == "READ WRITE":
-                        return
+                    if not is_init:
+                        dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
+                        conn = oracledb.connect(
+                            user="SYS",
+                            password=secrets.oracle_sys_password,
+                            dsn=dsn,
+                            mode=oracledb.AUTH_MODE_SYSDBA,
+                        )
+                        cur = conn.cursor()
+                        cur.execute("SELECT open_mode FROM v$database")
+                        row = cur.fetchone()
+                        conn.close()
+                        if row and row[0] == "READ WRITE":
+                            return
             else:
                 raise ValueError(f"Неизвестный тип СУБД '{config.type}'")
         except Exception as e:
             last_err = e
-            time.sleep(2)
+        time.sleep(2)
     raise TimeoutError(f"Таймаут ожидания готовности {config.type} {config.host}:{config.port}: {last_err}")
 
 
@@ -272,7 +284,7 @@ def _get_container(client: docker.DockerClient, name: str):
 
 def wake_up(
     source_name: str,
-    ttl_minutes: int,
+    ttl_minutes: int = DEFAULT_TTL_MINUTES,
     publish: bool = False,
     request_host: str | None = None,
 ) -> dict[str, Any]:

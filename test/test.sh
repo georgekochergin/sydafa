@@ -86,6 +86,13 @@ cleanup() {
   # Удаляем тестовый API-контейнер sydafa
   docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
 
+  # Зачищаем любые осиротевшие тестовые контейнеры sydafa-test-*
+  local orphaned_ids
+  orphaned_ids=$(docker ps -aq --filter "name=^sydafa-test-" --filter "label=sydafa-test=true" 2>/dev/null || true)
+  if [ -n "$orphaned_ids" ]; then
+    echo "$orphaned_ids" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+
   # 2. Удаляем тома данных СУБД и том состояния теста
   local v_ids
   v_ids=$(docker volume ls -q --filter "name=^${TARGET_VOLUME_PREFIX}" 2>/dev/null || true)
@@ -100,8 +107,18 @@ cleanup() {
   # 4. Удаляем временную папку конфига
   rm -rf "$CONF_DIR"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP
 
+# Удаляем любые зависшие тестовые контейнеры от прошлых нештатно прерванных прогонов
+reap_legacy_test_containers() {
+  local old_containers
+  old_containers=$(docker ps -aq --filter "name=^sydafa-test-" 2>/dev/null || true)
+  if [ -n "$old_containers" ]; then
+    echo "Предварительная зачистка осиротевших тестовых контейнеров: $old_containers"
+    echo "$old_containers" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+}
+reap_legacy_test_containers
 cleanup
 
 # Если образ ещё не собран, собираем его
@@ -122,7 +139,7 @@ test_mssql() {
   echo ">>> ФАЗА: Тестирование источника MSSQL <<<"
   echo "=================================================="
 
-  cat << 'EOF' > "$CONF_DIR/init.json"
+  cat << 'EOF' > "$CONF_DIR/sources.json"
 {
   "sources": {
     "mssql": {
@@ -137,18 +154,32 @@ EOF
 
   echo "Запуск сервиса sydafa для MSSQL (порт ${TEST_PORT}, префикс ${SRC_PREFIX})..."
   docker run -d --name "$TEST_CONTAINER" \
+    --label "sydafa-test=true" \
     --network "$TEST_NET" \
     -p "${TEST_PORT}:8000" \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
+    -v "$CONF_DIR/sources.json:/app/config/sources.json:ro" \
     -v "${TEST_STATE_VOL}:/state" \
     sydafa:latest
 
   echo "Ожидание готовности API sydafa (источник MSSQL поднимается лениво)..."
-  until curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; do
+  local max_attempts=40
+  local attempt=0
+  local ready=false
+  while [ $attempt -lt $max_attempts ]; do
+    if curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; then
+      ready=true
+      break
+    fi
+    attempt=$((attempt + 1))
     sleep 2
   done
+  if [ "$ready" = false ]; then
+    echo "ОШИБКА: Сервис sydafa не перешел в статус ok за $((max_attempts * 2)) секунд!"
+    docker logs "$TEST_CONTAINER"
+    exit 1
+  fi
 
   SYDAFA_E2E_PREFIX="$SRC_PREFIX" python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source mssql
   local rc=$?
@@ -171,7 +202,7 @@ EOF
     echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
   fi
   docker volume rm -f "$TEST_STATE_VOL" >/dev/null 2>&1 || true
-  rm -f "$CONF_DIR/init.json"
+  rm -f "$CONF_DIR/sources.json"
 }
 
 test_oracle() {
@@ -180,7 +211,7 @@ test_oracle() {
   echo ">>> ФАЗА: Тестирование источника Oracle <<<"
   echo "=================================================="
 
-  cat << 'EOF' > "$CONF_DIR/init.json"
+  cat << 'EOF' > "$CONF_DIR/sources.json"
 {
   "sources": {
     "oracle": {
@@ -195,18 +226,32 @@ EOF
 
   echo "Запуск сервиса sydafa для Oracle (порт ${TEST_PORT}, префикс ${SRC_PREFIX})..."
   docker run -d --name "$TEST_CONTAINER" \
+    --label "sydafa-test=true" \
     --network "$TEST_NET" \
     -p "${TEST_PORT}:8000" \
     -e SYDAFA_CONTAINER_PREFIX="$SRC_PREFIX" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$CONF_DIR/init.json:/app/config/init.json:ro" \
+    -v "$CONF_DIR/sources.json:/app/config/sources.json:ro" \
     -v "${TEST_STATE_VOL}:/state" \
     sydafa:latest
 
   echo "Ожидание готовности API sydafa (источник Oracle поднимается лениво)..."
-  until curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; do
+  local max_attempts=50
+  local attempt=0
+  local ready=false
+  while [ $attempt -lt $max_attempts ]; do
+    if curl -s "http://localhost:${TEST_PORT}/health" | grep -q '"status":"ok"'; then
+      ready=true
+      break
+    fi
+    attempt=$((attempt + 1))
     sleep 3
   done
+  if [ "$ready" = false ]; then
+    echo "ОШИБКА: Сервис sydafa не перешел в статус ok за $((max_attempts * 3)) секунд!"
+    docker logs "$TEST_CONTAINER"
+    exit 1
+  fi
 
   SYDAFA_E2E_PREFIX="$SRC_PREFIX" python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source oracle
   local rc=$?
@@ -229,7 +274,7 @@ EOF
     echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
   fi
   docker volume rm -f "$TEST_STATE_VOL" >/dev/null 2>&1 || true
-  rm -f "$CONF_DIR/init.json"
+  rm -f "$CONF_DIR/sources.json"
 }
 
 if [ -z "$SELECTED_SOURCE" ] || [ "$SELECTED_SOURCE" = "mssql" ]; then
