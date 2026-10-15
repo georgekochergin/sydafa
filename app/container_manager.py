@@ -52,9 +52,13 @@ def sanitize_user_token(token: str | None) -> str:
 def container_name_for(config: SourceConfig) -> str:
     prefix = sanitize_user_token(CONTAINER_PREFIX)
     src_name = sanitize_user_token(config.name)
-    parts = ["sydafa"]
-    if prefix:
+    parts: list[str] = []
+    if prefix.startswith("sydafa"):
         parts.append(prefix)
+    else:
+        parts.append("sydafa")
+        if prefix:
+            parts.append(prefix)
     parts.extend(["src", config.type, src_name])
     return "-".join(parts)
 
@@ -62,9 +66,13 @@ def container_name_for(config: SourceConfig) -> str:
 def volume_name_for(config: SourceConfig) -> str:
     prefix = sanitize_user_token(CONTAINER_PREFIX)
     src_name = sanitize_user_token(config.name)
-    parts = ["sydafa"]
-    if prefix:
+    parts: list[str] = []
+    if prefix.startswith("sydafa"):
         parts.append(prefix)
+    else:
+        parts.append("sydafa")
+        if prefix:
+            parts.append(prefix)
     parts.extend(["data", config.type, src_name])
     return "-".join(parts)
 
