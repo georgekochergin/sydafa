@@ -114,26 +114,28 @@ flowchart TD
 - Контейнеры MSSQL слушают стандартный внутренний порт **`1433`**.
 Конфликта портов не возникает: сервисы стенда (Spark, Airflow) обращаются к ним по DNS-именам: `sydafa-src-oracle-crm:1521` и `sydafa-src-mssql-billing:1433`.
 
-### Внешние порты на хост-машине (`SYDAFA_EXT_PORT_<NAME>`)
-Чтобы открыть доступ к базам из DBeaver на локальной машине, внешние порты хоста задаются индивидуально в переменных окружения сервиса `sydafa` в `docker-compose.yaml`:
-```yaml
-environment:
-  - SYDAFA_EXT_PORT_BILLING=14330   # пробросить на хост порт 14330 для инстанса billing
-  - SYDAFA_EXT_PORT_CRM=15211       # пробросить на хост порт 15211 для инстанса crm
+### Внешние порты на хост-машине (`external_port`)
+Чтобы открыть доступ к базам из DBeaver на локальной машине, внешний порт хоста указывается прямо в манифесте `sources.json`:
+```json
+"billing": {
+  "type": "mssql",
+  "external_port": 14330
+}
 ```
-Если для инстанса переменная не задана, внешний порт не открывается, и база работает изолированно внутри Docker-сети.
+Если для инстанса `external_port` не задан (или равен `null`), внешний порт не открывается, и база работает изолированно внутри Docker-сети.
 
 ---
 
-## 4. Декларативный манифест `init.json` (Seed)
+## 4. Декларативный манифест `sources.json` (Topology & Seed)
 
-Файл `init.json` монтируется в контейнер sydafa (`/app/config/init.json:ro`) и объявляет состав баз и начальное наполнение:
+Файл `sources.json` монтируется в контейнер sydafa (`/app/config/sources.json:ro`) и является **единственным источником правды** для топологии баз, внешних портов и начального наполнения:
 
 ```json
 {
   "sources": {
     "billing": {
       "type": "mssql",
+      "external_port": 14330,
       "operations": [
         {"op": "create_schema", "name": "demo"},
         {
@@ -151,24 +153,28 @@ environment:
     },
     "crm": {
       "type": "oracle",
+      "external_port": 15211,
       "operations": []
     }
   }
 }
 ```
 
-### Семантика начального наполнения (Seed)
-1. **Первичный старт (Eager-инициализация и глушение)**: при первом вызове `docker compose up -d` (когда том `/state` чист) sydafa поднимает контейнеры СУБД, перечисленные в `init.json`, настраивает учетные записи читателя/DBA, выполняет DDL (схемы, таблицы, ключи) и DML (генерация синтетических строк), после чего **сразу же останавливает контейнеры СУБД (`docker stop`)**. В режиме ожидания СУБД не потребляют оперативную память хоста (0 MB RAM).
-2. **Единый маркер инициализации (`applied: true`, `applied_at`)**: после успешного выполнения начального сида sydafa фиксирует факт в `/state/init_state.json` с точной датой UTC (например, `"applied_at": "2026-10-14T12:00:00Z"`).
-3. **Строгое игнорирование последующих изменений `init.json`**: при любых повторных перезапусках сервиса (`docker compose restart`, `docker compose stop/up`) sydafa видит установленный флаг `applied: true` и полностью игнорирует файл `init.json`. Дописывание новых источников или таблиц в `init.json` не вызовет пересоздания — инициализация уже произошла.
-4. **Инспекция момента инициализации**: дата и время первичного сида всегда доступны через `GET /health` в поле `initialized_at`. Если вы видите старую дату `initialized_at`, значит сервис работает на сохраненном постоянном томе состояния.
-5. **Сброс с чистого листа**: чтобы пересоздать базы строго по новому `init.json`, выполняется штатный сброс томов Compose:
+### Семантика манифеста и жизненного цикла
+1. **Статичная топология и внешние порты**: состав источников и их внешние порты хоста (`external_port`) объявляются декларативно в `sources.json`. Переменные окружения `SYDAFA_EXT_PORT_*` больше не требуются.
+2. **Бесшовная смена внешнего порта**: если вам нужно изменить внешний порт базы на хосте, достаточно изменить `external_port` в `sources.json` и перезапустить sydafa (`docker compose restart sydafa`). При следующей активации sydafa автоматически пересоздаст контейнер СУБД с новым портом на хосте, **полностью сохранив все таблицы и данные в томе данных (`volume`)**.
+3. **По-источниковый Genesis Seed (Additive Seed)**:
+   - При старте sydafa проверяет по-источниковый маркер инициализации в `/state/init_state.json` (`applied_sources`).
+   - Если источник ещё ни разу не инициализировался (первый старт или новый источник, дописанный в `sources.json`), sydafa поднимает его СУБД, применяет DDL/DML из `operations` и **немедленно останавливает СУБД (`docker stop`)**, возвращая 0 MB RAM.
+   - Если источник уже инициализировался ранее, блок `operations` для него **полностью игнорируется**, а контейнер СУБД даже не запускается на старте.
+4. **Добавление нового источника в работающий стенд**: просто допишите новый объект в `sources.json` и выполните `docker compose restart sydafa`. Sydafa поднимет и наполнит только новый источник, не затрагивая уже работающие базы.
+5. **Инспекция состояния**: временная метка последнего сида доступна через `GET /health` в поле `initialized_at`.
+6. **Сброс с чистого листа**: чтобы пересоздать базы строго по исходному `sources.json`, выполните:
    ```bash
    docker compose down -v
    docker compose up -d
    ```
-6. **Защита от потери данных**: в рантайме sydafa никогда не выполняет автоматический `DROP TABLE` без явной команды в API. Накопленные данные в именованных томах сохраняются.
-7. **Самоочистка (Self-Healing)**: если том `/state` удален, но старые контейнеры СУБД или тома данных остались, sydafa на старте автоматически удаляет осиротевшие ресурсы и разворачивает чистое окружение.
+7. **Самоочистка (Self-Healing)**: если том `/state` удален, но старые контейнеры СУБД или тома данных остались, sydafa на старте автоматически очищает осиротевшие ресурсы своего префикса и разворачивает чистое окружение.
 
 ---
 
@@ -223,6 +229,32 @@ environment:
    - Password: `sydafa`
    - Для MSSQL: во вкладке *Driver Properties* включите `trustServerCertificate=true`.
 
+### 3. Точечная реинициализация источника (`POST /sources/{source}/reinit`)
+
+Когда разработчик меняет состав колонок, таблиц или генераторов в блоке `operations` файла `sources.json` для **конкретного источника** (например, `billing`), нет необходимости перезапускать весь compose-стек или удалять все базы командой `docker compose down -v`:
+
+1. Отредактируйте `sources.json` (обновите блок `operations` для нужной базы).
+2. Вызовите метод `POST /sources/{source}/reinit` (через Swagger UI или curl).
+3. Sydafa автоматически и изолированно выполнит:
+   - Принудительную остановку и удаление контейнера СУБД (`sydafa-src-<type>-<name>`);
+   - Удаление именованного тома данных именно этого источника (`sydafa-data-<type>-<name>`);
+   - Очистку live-схемы `/state/live_schema.{source}.json` и сброс статуса;
+   - Сброс маркера инициализации в `/state/init_state.json`;
+   - Поднятие чистой СУБД, выполнение всех свежих операций DDL/DML из `sources.json`;
+   - Немедленную остановку контейнера СУБД для освобождения памяти хоста (0 MB RAM).
+4. **Все остальные источники (Oracle, ERP и т.д.) продолжают жить без изменений и простоя**.
+
+Пример ответа:
+```json
+{
+  "status": "reinitialized",
+  "source": "billing",
+  "applied_at": "2026-10-15T12:00:00Z",
+  "operations_executed": 3,
+  "message": "Источник 'billing' успешно зачищен и реинициализирован с 3 операциями."
+}
+```
+
 ---
 
 ## 6. Раздельный запуск: sydafa и стенд КХД в двух Docker Compose
@@ -239,11 +271,9 @@ services:
     environment:
       - SYDAFA_MAX_TTL_MINUTES=30
       - SYDAFA_TTL_MINUTES=15
-      - SYDAFA_EXT_PORT_BILLING=14330
-      - SYDAFA_EXT_PORT_CRM=15211
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./conf/sydafa/init.json:/app/config/init.json:ro
+      - ./conf/sydafa/sources.json:/app/config/sources.json:ro
       - sydafa_state:/state
     ports:
       - "8090:8000"
@@ -297,11 +327,9 @@ services:
     image: ghcr.io/georgekochergin/sydafa:latest
     environment:
       - SYDAFA_CONTAINER_PREFIX=inst1-
-      - SYDAFA_EXT_PORT_BILLING=14331
-      - SYDAFA_EXT_PORT_CRM=15211
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./conf1/init.json:/app/config/init.json:ro
+      - ./conf1/sources.json:/app/config/sources.json:ro
       - sydafa_state_1:/state
     ports:
       - "8091:8000"
@@ -324,11 +352,9 @@ services:
     image: ghcr.io/georgekochergin/sydafa:latest
     environment:
       - SYDAFA_CONTAINER_PREFIX=inst2-
-      - SYDAFA_EXT_PORT_BILLING=14332
-      - SYDAFA_EXT_PORT_CRM=15212
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./conf2/init.json:/app/config/init.json:ro
+      - ./conf2/sources.json:/app/config/sources.json:ro
       - sydafa_state_2:/state
     ports:
       - "8092:8000"
@@ -348,19 +374,18 @@ networks:
 
 Интерактивный Swagger UI доступен по адресу: `http://localhost:<порт-sydafa>/docs`.
 
-### 1. Оркестрация источников (Orchestration API)
+### 1. Источники данных (Sources API)
 | Метод | Путь | Описание | Пример тела |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/sources` | Список зарегистрированных источников (безопасный запрос из памяти) | — |
-| `POST` | `/sources` | Динамическая регистрация нового инстанса СУБД | `{"name": "crm", "type": "oracle"}` |
-| `DELETE` | `/sources/{name}` | Остановка контейнера и удаление инстанса | — |
+| `GET` | `/sources` | Список зарегистрированных источников из манифеста `sources.json` (безопасный запрос из памяти) | — |
 
 ### 2. Жизненный цикл инстанса (Lifecycle API)
-| Метод | Путь | Описание | Параметры query |
+| Метод | Путь | Описание | Параметры query / тела |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/sources/{source}/status` | Текущий статус, срок TTL и реквизиты `connection` (безопасный запрос) | — |
 | `POST` | `/sources/{source}/activate` | Физический запуск СУБД в Docker и продление срока жизни | `?ttl_minutes=15` |
 | `POST` | `/sources/{source}/deactivate` | Принудительная остановка базы для освобождения RAM | — |
+| `POST` | `/sources/{source}/reinit` | **Точечная реинициализация источника**: удаление контейнера, тома данных `sydafa-data-...`, очистка live-схемы и повторный накат свежих `operations` из `sources.json`. СУБД останавливается после сида. Остальные базы не затрагиваются. | — |
 
 ### 3. Данные и схемы (Data & Schema API)
 | Метод | Путь | Описание | Пример тела |

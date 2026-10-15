@@ -269,6 +269,34 @@ def wake_up(
         name = container_name_for(config)
         container = _get_container(client, name)
 
+        if container is not None:
+            # Проверяем, изменился ли external_port в sources.json по сравнению с запущенным контейнером
+            current_ext_port: int | None = None
+            try:
+                ports_dict = container.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
+                internal_key = f"{config.port}/tcp"
+                bindings = ports_dict.get(internal_key)
+                if bindings and isinstance(bindings, list) and len(bindings) > 0:
+                    host_port_str = bindings[0].get("HostPort")
+                    if host_port_str and host_port_str.isdigit():
+                        current_ext_port = int(host_port_str)
+            except Exception as e:
+                logger.warning("Не удалось инспектировать порты контейнера %s: %s", name, e)
+
+            if current_ext_port != config.external_port:
+                logger.info(
+                    "Обнаружено изменение external_port для '%s' (%s -> %s). Пересоздание контейнера %s с сохранением данных...",
+                    source_name,
+                    current_ext_port,
+                    config.external_port,
+                    name,
+                )
+                try:
+                    container.remove(force=True)
+                except Exception as e:
+                    logger.warning("Ошибка при удалении устаревшего контейнера %s: %s", name, e)
+                container = None
+
         if container is None:
             container = _run_container(client, source_name, config)
 
@@ -312,6 +340,32 @@ def deactivate(source_name: str) -> dict[str, Any]:
             except Exception as e:
                 logger.warning("Ошибка при остановке %s: %s", name, e)
         return source_status.mark_idle(source_name)
+
+
+def purge_source_container_and_volume(source_name: str) -> None:
+    """Полностью удаляет контейнер СУБД и связанный именованный том данных источника."""
+    config = get_source(source_name)
+    with _source_lock(source_name):
+        client = _get_docker_client()
+        cname = container_name_for(config)
+        vname = volume_name_for(config)
+
+        container = _get_container(client, cname)
+        if container is not None:
+            logger.info("Принудительное удаление контейнера %s для реинициализации...", cname)
+            try:
+                container.remove(force=True, v=True)
+            except Exception as e:
+                logger.warning("Ошибка удаления контейнера %s: %s", cname, e)
+
+        try:
+            vol = client.volumes.get(vname)
+            logger.info("Удаление тома данных %s для источника '%s'...", vname, source_name)
+            vol.remove(force=True)
+        except NotFound:
+            pass
+        except Exception as e:
+            logger.warning("Ошибка удаления тома данных %s: %s", vname, e)
 
 
 def get_runtime_status(source_name: str, request_host: str | None = None) -> dict[str, Any]:

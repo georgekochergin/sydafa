@@ -141,23 +141,29 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["state"], "idle")
 
-    def test_create_and_delete_source(self):
-        with patch("app.sources.source_names", return_value=[]), \
-             patch("app.sources.register_source") as mock_reg, \
-             patch("app.sources.remove_source") as mock_rem, \
-             patch("app.container_manager.deactivate"):
-            mock_reg.return_value = SourceConfig(name="billing", type="mssql", host="sydafa-mssql-billing-source", port=1433)
-            resp = self.client.post("/sources", json={"name": "billing", "type": "mssql"})
-            self.assertEqual(resp.status_code, 201)
-            self.assertEqual(resp.json()["source"], "billing")
-            mock_reg.assert_called_once_with("billing", "mssql", None)
-
-        with patch("app.sources.source_names", return_value=["billing"]), \
-             patch("app.sources.remove_source") as mock_rem, \
-             patch("app.container_manager.deactivate"):
-            resp = self.client.delete("/sources/billing")
+    def test_reinit_source_endpoint(self):
+        reinit_res = {
+            "status": "reinitialized",
+            "source": "mssql",
+            "applied_at": "2026-10-15T12:00:00Z",
+            "operations_executed": 2,
+            "message": "Источник 'mssql' успешно зачищен и реинициализирован с 2 операциями.",
+        }
+        with patch("app.sources.source_names", return_value=["mssql"]), \
+             patch("app.init_apply.reinit_source", return_value=reinit_res) as mock_reinit:
+            resp = self.client.post("/sources/mssql/reinit")
             self.assertEqual(resp.status_code, 200)
-            mock_rem.assert_called_once_with("billing")
+            data = resp.json()
+            self.assertEqual(data["status"], "reinitialized")
+            self.assertEqual(data["source"], "mssql")
+            self.assertEqual(data["operations_executed"], 2)
+            mock_reinit.assert_called_once_with("mssql")
+
+    def test_list_sources(self):
+        with patch("app.sources.source_names", return_value=["billing", "crm"]):
+            resp = self.client.get("/sources")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json(), {"sources": ["billing", "crm"]})
 
 
 if __name__ == "__main__":
