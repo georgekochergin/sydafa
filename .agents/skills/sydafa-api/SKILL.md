@@ -11,7 +11,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 > **Каноническая спецификация операций и моделей данных:**
 > Полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
-> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`) и правил валидации
+> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`) и правил валидации
 > находится в основном файле документации проекта: [README.md](../../../README.md) (Раздел 9 «Единый метод исполнения: `POST /sources/{source}/exec`»).
 
 ## Формат ответа (обязательный)

@@ -431,12 +431,46 @@ networks:
 | `kind` | Дополнительные параметры | Описание и пример |
 | :--- | :--- | :--- |
 | `sequence` | — | Автоинкрементный счетчик целых чисел (`1, 2, 3...`) |
-| `faker` | `provider`: `"company"` \| `"name"` \| `"word"` \| `"address"` \| `"email"` | Синтетические реалистичные строки соответствующего профиля Faker |
-| `choice` | `values`: `["Retail", "Corporate", "VIP"]` | Случайный выбор одного значения из переданного списка |
+| `faker` | `provider`: `"name"` \| `"company"` \| `"word"` \| `"address"` \| `"email"`, `locale`: `"ru_RU"` (по умолчанию) | Реалистичные строки через Faker с поддержкой русской локали |
+| `choice` | `values`: `["Retail", "Corporate", "VIP"]`, `weights`: `[0.85, 0.12, 0.03]` | Случайный выбор из списка (равновероятный или взвешенный через `weights`) |
 | `random_decimal` | `min`: `10.0`, `max`: `5000.0` | Случайное число с плавающей точкой в заданном диапазоне |
-| `random_date` | — | Случайная дата в пределах текущего и прошедшего года |
+| `random_date` | `anchor`: `"start_of_year"` (дефолт) \| `"today"` \| `"start_of_quarter"` \| `"start_of_month"` \| `"end_of_year"`, `dim`: `"y"` \| `"m"` \| `"d"`, `min_offset`, `max_offset` | По умолчанию дата строго в пределах **текущего календарного года**. С параметрами — смещение от опорной точки `anchor` на `[min_offset, max_offset]` в размерности `dim` |
+| `date_offset` | `ref_column`: `"contract_start_date"`, `dim`: `"y"` \| `"m"` \| `"d"` (дефолт `"y"`), `min_offset`: `1` (строго `> 0`), `max_offset`: `5` | Вычисляемая дата со смещением относительно другой колонки строки. Независима от физического порядка колонок в таблице (автоматический DAG) |
 
-> Если у колонки генератор не указан (`null`), при `append` в нее вставляется значение `NULL`.
+> **Доля NULL-значений (`null_ratio`):** Для любого генератора поддерживается опциональный параметр `null_ratio` от `0.0` до `1.0` (например, `null_ratio: 0.3` = 30% значений генерируются как `NULL`).
+>
+> Если у колонки генератор не указан (`null`), при `append` в нее всегда вставляется значение `NULL`.
+
+#### Пример генерации договоров с датами начала и окончания:
+```json
+{
+  "op": "create_table",
+  "schema": "demo",
+  "name": "contracts",
+  "primary_key": ["contract_id"],
+  "columns": [
+    {"name": "contract_id", "type": "bigint", "generator": {"kind": "sequence"}},
+    {
+      "name": "contract_end_date",
+      "type": "date",
+      "generator": {
+        "kind": "date_offset",
+        "ref_column": "contract_start_date",
+        "dim": "y",
+        "min_offset": 1,
+        "max_offset": 5
+      }
+    },
+    {
+      "name": "contract_start_date",
+      "type": "date",
+      "generator": {"kind": "random_date"}
+    }
+  ],
+  "foreign_keys": []
+}
+```
+*(Обратите внимание: `contract_end_date` объявлена до `contract_start_date`, но система автоматически разрешает зависимость и вычисляет дату окончания позже даты начала)*.
 
 ---
 

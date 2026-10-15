@@ -1,8 +1,9 @@
 """Генерация и мутация синтетических данных (append / update / delete) с FK-каскадом."""
 from __future__ import annotations
 
+import calendar
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from faker import Faker
@@ -19,7 +20,13 @@ from .models import (
 from .render_ddl import qualify_table, quote_ident
 from .sources import get_source
 
-_fake = Faker()
+_faker_cache: dict[str, Faker] = {}
+
+
+def _get_faker(locale: str) -> Faker:
+    if locale not in _faker_cache:
+        _faker_cache[locale] = Faker(locale)
+    return _faker_cache[locale]
 
 
 class GeneratorError(ValueError):
@@ -34,25 +41,127 @@ def _placeholder(dialect: str, index: int) -> str:
     return "%s" if dialect == "mssql" else f":{index}"
 
 
-def _generate_value(col: ColumnSpec) -> Any:
+def _resolve_anchor_date(anchor: str) -> date:
+    today = date.today()
+    if anchor == "start_of_year":
+        return date(today.year, 1, 1)
+    if anchor == "end_of_year":
+        return date(today.year, 12, 31)
+    if anchor == "today":
+        return today
+    if anchor == "start_of_month":
+        return date(today.year, today.month, 1)
+    if anchor == "start_of_quarter":
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        return date(today.year, q_month, 1)
+    raise GeneratorError(f"Неизвестная опорная точка anchor: '{anchor}'")
+
+
+def _shift_date(base: date, dim: str, offset: int) -> date:
+    if dim == "d":
+        return base + timedelta(days=offset)
+    if dim == "m":
+        total_months = base.year * 12 + (base.month - 1) + offset
+        target_year = total_months // 12
+        target_month = (total_months % 12) + 1
+        max_days = calendar.monthrange(target_year, target_month)[1]
+        target_day = min(base.day, max_days)
+        return date(target_year, target_month, target_day)
+    if dim == "y":
+        target_year = base.year + offset
+        if base.month == 2 and base.day == 29:
+            target_day = 29 if calendar.isleap(target_year) else 28
+        else:
+            target_day = base.day
+        return date(target_year, base.month, target_day)
+    raise GeneratorError(f"Неизвестная размерность dim: '{dim}'. Разрешены 'y', 'm', 'd'")
+
+
+def _generate_value(col: ColumnSpec, row_values: dict[str, Any] | None = None) -> Any:
     gen = col.generator
     if gen is None:
         return None
 
+    null_ratio = getattr(gen, "null_ratio", None)
+    if null_ratio is not None and random.random() < null_ratio:
+        return None
+
     kind = getattr(gen, "kind", None)
     if kind == "faker":
+        locale = getattr(gen, "locale", "ru_RU")
         provider = getattr(gen, "provider", "word")
-        return getattr(_fake, provider, _fake.word)()
+        fk = _get_faker(locale)
+        func = getattr(fk, provider, None)
+        if func is None:
+            func = fk.word
+        return func()
+
     if kind == "choice":
         values = getattr(gen, "values", [])
-        return random.choice(values) if values else None
+        if not values:
+            return None
+        weights = getattr(gen, "weights", None)
+        if weights:
+            return random.choices(values, weights=weights, k=1)[0]
+        return random.choice(values)
+
     if kind == "random_decimal":
         min_v = getattr(gen, "min", 0.0)
         max_v = getattr(gen, "max", 100000.0)
         return round(random.uniform(min_v, max_v), 2)
+
     if kind == "random_date":
-        start = date.today() - timedelta(days=365)
-        return start + timedelta(days=random.randint(0, 365))
+        anchor = getattr(gen, "anchor", "start_of_year")
+        dim = getattr(gen, "dim", "d")
+        min_offset = getattr(gen, "min_offset", None)
+        max_offset = getattr(gen, "max_offset", None)
+
+        if min_offset is None and max_offset is None:
+            if anchor == "start_of_year" and dim == "d":
+                year = date.today().year
+                start = date(year, 1, 1)
+                end = date(year, 12, 31)
+                days = (end - start).days
+                return start + timedelta(days=random.randint(0, days))
+            min_o, max_o = 0, 0
+        else:
+            min_o = min_offset if min_offset is not None else 0
+            max_o = max_offset if max_offset is not None else min_o
+
+        if min_o > max_o:
+            min_o, max_o = max_o, min_o
+
+        offset = random.randint(min_o, max_o)
+        base = _resolve_anchor_date(anchor)
+        return _shift_date(base, dim, offset)
+
+    if kind == "date_offset":
+        ref_column = getattr(gen, "ref_column", None)
+        if not ref_column:
+            raise GeneratorError(f"Для генератора date_offset не указан обязательный параметр ref_column")
+
+        base_val = row_values.get(ref_column) if row_values is not None else None
+        if base_val is None:
+            return None
+
+        if isinstance(base_val, str):
+            base_date = date.fromisoformat(base_val)
+        elif isinstance(base_val, datetime):
+            base_date = base_val.date()
+        elif isinstance(base_val, date):
+            base_date = base_val
+        else:
+            raise GeneratorError(f"Значение колонки '{ref_column}' ({base_val}) не является корректной датой")
+
+        dim = getattr(gen, "dim", "y")
+        min_o = getattr(gen, "min_offset", 1)
+        max_o = getattr(gen, "max_offset", 5)
+        if min_o > max_o:
+            min_o, max_o = max_o, min_o
+
+        offset = random.randint(min_o, max_o)
+        return _shift_date(base_date, dim, offset)
+
     return None
 
 
@@ -123,12 +232,43 @@ def _mint_new_row(
     for fk in table.foreign_keys:
         values.update(_resolve_fk_values(conn, source, dialect, live, fk, table.schema_, new_key_ratio, batch_id))
 
+    candidates: dict[str, ColumnSpec] = {}
+    dependencies: dict[str, set[str]] = {}
+    all_table_column_names = {c.name for c in table.columns}
+
     for col in table.columns:
         if col.name in table.primary_key or _fk_for_column(table, col.name):
             continue
         if col.name in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
             continue
-        values[col.name] = _generate_value(col)
+        candidates[col.name] = col
+
+        deps: set[str] = set()
+        gen = col.generator
+        if gen is not None and getattr(gen, "kind", None) == "date_offset":
+            ref = getattr(gen, "ref_column", None)
+            if not ref or ref not in all_table_column_names:
+                raise GeneratorError(
+                    f"Колонка '{col.name}' таблицы '{table.name}' ссылается на неизвестную ref_column='{ref}'"
+                )
+            deps.add(ref)
+        dependencies[col.name] = deps
+
+    remaining = set(candidates.keys())
+    while remaining:
+        ready = [
+            c_name for c_name in remaining
+            if all(dep in values for dep in dependencies[c_name])
+        ]
+        if not ready:
+            raise GeneratorError(
+                f"Обнаружена циклическая или неразрешимая зависимость между колонками в таблице '{table.name}': {sorted(remaining)}"
+            )
+
+        for c_name in ready:
+            col = candidates[c_name]
+            values[c_name] = _generate_value(col, values)
+            remaining.remove(c_name)
 
     for pk_col in table.primary_key:
         if pk_col not in values:
