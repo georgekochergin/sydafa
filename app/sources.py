@@ -13,11 +13,18 @@ logger = logging.getLogger("sydafa.sources")
 _sources: dict[str, SourceConfig] = {}
 
 
-def _find_init_file() -> Path | None:
-    env_path = os.environ.get("SYDAFA_INIT_FILE")
+def _find_sources_file() -> Path | None:
+    env_path = os.environ.get("SYDAFA_SOURCES_FILE") or os.environ.get("SYDAFA_INIT_FILE")
     if env_path and Path(env_path).is_file():
         return Path(env_path)
     candidates = [
+        Path("/app/config/sources.json"),
+        Path("config/sources.json"),
+        Path("sources.json"),
+        Path("conf/sydafa/sources.json"),
+        Path("test/sydafa/sources.json"),
+        Path(__file__).parent.parent / "config" / "sources.json",
+        # Fallback candidates for transition
         Path("/app/config/init.json"),
         Path("config/init.json"),
         Path("sydafa/init.json"),
@@ -31,14 +38,14 @@ def _find_init_file() -> Path | None:
     return None
 
 
-def _load_sources_from_init() -> dict[str, SourceConfig]:
-    init_path = _find_init_file()
-    if not init_path:
+def _load_sources_from_manifest() -> dict[str, SourceConfig]:
+    sources_path = _find_sources_file()
+    if not sources_path:
         return {}
     try:
-        data = json.loads(init_path.read_text(encoding="utf-8"))
+        data = json.loads(sources_path.read_text(encoding="utf-8"))
     except Exception as e:
-        logger.error("Ошибка чтения init.json %s: %s", init_path, e)
+        logger.error("Ошибка чтения файла манифеста %s: %s", sources_path, e)
         return {}
     if not isinstance(data, dict):
         return {}
@@ -52,18 +59,22 @@ def _load_sources_from_init() -> dict[str, SourceConfig]:
     for instance_name, val in src_dict.items():
         if isinstance(val, dict):
             src_type = val.get("type", "").lower()
+            raw_ext_port = val.get("external_port")
         else:
             src_type = instance_name.lower()
+            raw_ext_port = None
 
         if src_type not in DEFAULT_INTERNAL_PORTS:
             logger.warning("Пропущен источник '%s': неизвестный тип СУБД '%s'", instance_name, src_type)
             continue
 
-        ext_port_env = os.environ.get(f"SYDAFA_EXT_PORT_{instance_name.upper()}")
-        if not ext_port_env and instance_name == src_type:
-            ext_port_env = os.environ.get(f"SYDAFA_EXT_PORT_{src_type.upper()}")
+        ext_port: int | None = None
+        if raw_ext_port is not None:
+            try:
+                ext_port = int(raw_ext_port)
+            except (ValueError, TypeError):
+                logger.warning("Некорректный external_port '%s' для источника '%s'", raw_ext_port, instance_name)
 
-        ext_port = int(ext_port_env) if ext_port_env and ext_port_env.isdigit() else None
         if ext_port is not None:
             if ext_port in used_ext_ports:
                 logger.error(
@@ -91,7 +102,7 @@ def _load_sources_from_init() -> dict[str, SourceConfig]:
 
 def load_sources() -> dict[str, SourceConfig]:
     global _sources
-    _sources = _load_sources_from_init()
+    _sources = _load_sources_from_manifest()
     return _sources
 
 

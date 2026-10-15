@@ -269,6 +269,34 @@ def wake_up(
         name = container_name_for(config)
         container = _get_container(client, name)
 
+        if container is not None:
+            # Проверяем, изменился ли external_port в sources.json по сравнению с запущенным контейнером
+            current_ext_port: int | None = None
+            try:
+                ports_dict = container.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
+                internal_key = f"{config.port}/tcp"
+                bindings = ports_dict.get(internal_key)
+                if bindings and isinstance(bindings, list) and len(bindings) > 0:
+                    host_port_str = bindings[0].get("HostPort")
+                    if host_port_str and host_port_str.isdigit():
+                        current_ext_port = int(host_port_str)
+            except Exception as e:
+                logger.warning("Не удалось инспектировать порты контейнера %s: %s", name, e)
+
+            if current_ext_port != config.external_port:
+                logger.info(
+                    "Обнаружено изменение external_port для '%s' (%s -> %s). Пересоздание контейнера %s с сохранением данных...",
+                    source_name,
+                    current_ext_port,
+                    config.external_port,
+                    name,
+                )
+                try:
+                    container.remove(force=True)
+                except Exception as e:
+                    logger.warning("Ошибка при удалении устаревшего контейнера %s: %s", name, e)
+                container = None
+
         if container is None:
             container = _run_container(client, source_name, config)
 

@@ -11,9 +11,9 @@ from . import container_manager, exec_engine, schema_state, sources
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
 from .exec_engine import ExecError
 from .models import (
-    CreateSourceRequest,
     ExecRequest,
     ExecResult,
+    LiveSchema,
     SourceInfo,
     SourceLifecycleStatus,
     TableRef,
@@ -103,42 +103,8 @@ def _wake(source: str, ttl_minutes: int = DEFAULT_TTL_MINUTES, publish: bool = F
 
 @app.get("/sources")
 def list_sources():
+    """Возвращает список всех источников, зарегистрированных в манифесте sources.json."""
     return {"sources": sources.source_names()}
-
-
-@app.post("/sources", response_model=SourceInfo, status_code=status.HTTP_201_CREATED)
-def create_source(req: CreateSourceRequest, request: Request):
-    if req.name in sources.source_names():
-        raise HTTPException(status.HTTP_409_CONFLICT, f"Источник '{req.name}' уже существует")
-    try:
-        cfg = sources.register_source(req.name, req.type, req.external_port)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
-
-    request_host = request.url.hostname if request else None
-    conn = container_manager.build_connection_details(req.name, cfg, request_host=request_host)
-    return SourceInfo(
-        source=req.name,
-        type=cfg.type,
-        database=SYDAFA_DB,
-        host=cfg.host,
-        port=cfg.port,
-        reader=cfg.reader,
-        schemas=[],
-        tables=[],
-        connection=conn,
-    )
-
-
-@app.delete("/sources/{source}")
-def delete_source(source: str):
-    _assert_source(source)
-    try:
-        container_manager.deactivate(source)
-    except Exception:
-        pass
-    sources.remove_source(source)
-    return {"status": "deleted", "source": source}
 
 
 @app.get("/sources/{source}", response_model=SourceInfo)

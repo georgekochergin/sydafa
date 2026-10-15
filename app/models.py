@@ -372,19 +372,12 @@ class ExecRequest(BaseModel):
     operations: list[ExecOperation]
 
 
-class SourceInitSpec(BaseModel):
+class SourceManifestSpec(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    type: Literal["mssql", "oracle"]
-    operations: list[ExecOperation] = Field(default_factory=list)
-
-
-class CreateSourceRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    name: str
     type: Literal["mssql", "oracle"]
     external_port: int | None = None
+    operations: list[ExecOperation] = Field(default_factory=list)
 
 
 class ExecResult(BaseModel):
