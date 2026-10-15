@@ -60,6 +60,9 @@ GeneratorSpec = Annotated[
 
 # --- Спецификация колонок и таблиц ---
 
+BATCH_ID_COLUMN = "_batch_id"
+EXEC_BATCH_ID_COLUMN = "_exec_batch_id"
+
 _IDENT_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 

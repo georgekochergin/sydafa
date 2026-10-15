@@ -8,11 +8,14 @@ from typing import Any
 
 from .models import (
     AddColumnOp,
+    BATCH_ID_COLUMN,
+    ColumnSpec,
     CreateSchemaOp,
     CreateTableOp,
     DropColumnOp,
     DropSchemaOp,
     DropTableOp,
+    EXEC_BATCH_ID_COLUMN,
     EvolveOperation,
     EvolveRequest,
     EvolveResult,
@@ -23,7 +26,7 @@ from .models import (
     TableSchema,
     TransferTableOp,
 )
-from .render_ddl import map_type, render_create_table
+from .render_ddl import map_type, qualify_table, render_create_table
 from .schema_state import append_evolution_log, get_live_schema, save_live_schema
 from .sources import get_source
 
@@ -40,6 +43,50 @@ class SchemaEvolutionError(ValueError):
 
 def _table_key(schema: str, table: str) -> str:
     return f"{schema}.{table}"
+
+
+def _upd_table_name(table_name: str) -> str:
+    return f"_upd_{table_name}"
+
+
+def _del_table_name(table_name: str) -> str:
+    return f"_del_{table_name}"
+
+
+def _make_audit_table_schema(main_table: TableSchema, audit_name: str) -> TableSchema:
+    audit_columns = [ColumnSpec(name=EXEC_BATCH_ID_COLUMN, type="bigint")]
+    for col in main_table.columns:
+        if col.name != EXEC_BATCH_ID_COLUMN:
+            audit_columns.append(col.model_copy())
+    return TableSchema(
+        name=audit_name,
+        schema=main_table.schema_,
+        primary_key=[],
+        columns=audit_columns,
+        foreign_keys=[],
+    )
+
+
+def _recreate_audit_tables_ddl(
+    table_obj: TableSchema,
+    dialect: str,
+    live: LiveSchema,
+) -> list[str]:
+    ddl: list[str] = []
+    upd_name = _upd_table_name(table_obj.name)
+    del_name = _del_table_name(table_obj.name)
+    cascade = " CASCADE CONSTRAINTS" if dialect == "oracle" else ""
+    ddl.append(f"DROP TABLE {qualify_table(table_obj.schema_, upd_name, dialect)}{cascade}")
+    ddl.append(f"DROP TABLE {qualify_table(table_obj.schema_, del_name, dialect)}{cascade}")
+
+    upd_schema = _make_audit_table_schema(table_obj, upd_name)
+    del_schema = _make_audit_table_schema(table_obj, del_name)
+    ddl.append(render_create_table(upd_schema, dialect))
+    ddl.append(render_create_table(del_schema, dialect))
+
+    live.tables[_table_key(table_obj.schema_, upd_name)] = upd_schema
+    live.tables[_table_key(table_obj.schema_, del_name)] = del_schema
+    return ddl
 
 
 def _build_ddl_and_update_state(
@@ -127,29 +174,50 @@ def _build_ddl_and_update_state(
         if key in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{key}' уже существует")
 
+        # Игнорируем пользовательские попытки объявить системные колонки _batch_id или _exec_batch_id
+        filtered_cols = [c for c in op.columns if c.name not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
+        filtered_pk = [k for k in op.primary_key if k not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
+        # Системно внедряем обязательную колонку _batch_id
+        filtered_cols.append(ColumnSpec(name=BATCH_ID_COLUMN, type="bigint"))
+
         t_schema = TableSchema(
             name=op.name,
             schema=op.schema_,
-            primary_key=op.primary_key,
-            columns=op.columns,
+            primary_key=filtered_pk,
+            columns=filtered_cols,
             foreign_keys=op.foreign_keys,
         )
         ddl_statements.append(render_create_table(t_schema, dialect))
         live.tables[key] = t_schema
-        desc = f"Создана таблица '{key}'"
+
+        # Создаем пустые таблицы аудита _upd_ и _del_
+        upd_name = _upd_table_name(op.name)
+        del_name = _del_table_name(op.name)
+        upd_schema = _make_audit_table_schema(t_schema, upd_name)
+        del_schema = _make_audit_table_schema(t_schema, del_name)
+        ddl_statements.append(render_create_table(upd_schema, dialect))
+        ddl_statements.append(render_create_table(del_schema, dialect))
+        live.tables[_table_key(op.schema_, upd_name)] = upd_schema
+        live.tables[_table_key(op.schema_, del_name)] = del_schema
+
+        desc = f"Создана таблица '{key}' и пустые таблицы аудита '{upd_name}', '{del_name}'"
 
     elif isinstance(op, DropTableOp):
         key = _table_key(op.schema_, op.name)
         if key not in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{key}' не найдена")
 
-        if dialect == "mssql":
-            ddl_statements.append(f"DROP TABLE [{op.schema_}].[{op.name}]")
-        else:
-            ddl_statements.append(f"DROP TABLE {op.schema_}.{op.name} CASCADE CONSTRAINTS")
+        cascade = " CASCADE CONSTRAINTS" if dialect == "oracle" else ""
+        ddl_statements.append(f"DROP TABLE {qualify_table(op.schema_, op.name, dialect)}{cascade}")
+        upd_name = _upd_table_name(op.name)
+        del_name = _del_table_name(op.name)
+        ddl_statements.append(f"DROP TABLE {qualify_table(op.schema_, upd_name, dialect)}{cascade}")
+        ddl_statements.append(f"DROP TABLE {qualify_table(op.schema_, del_name, dialect)}{cascade}")
 
-        del live.tables[key]
-        desc = f"Удалена таблица '{key}'"
+        live.tables.pop(key, None)
+        live.tables.pop(_table_key(op.schema_, upd_name), None)
+        live.tables.pop(_table_key(op.schema_, del_name), None)
+        desc = f"Удалена таблица '{key}' и таблицы аудита"
 
     elif isinstance(op, RenameTableOp):
         old_key = _table_key(op.schema_, op.from_name)
@@ -159,14 +227,34 @@ def _build_ddl_and_update_state(
         if new_key in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{new_key}' уже существует")
 
+        old_upd = _upd_table_name(op.from_name)
+        new_upd = _upd_table_name(op.to_name)
+        old_del = _del_table_name(op.from_name)
+        new_del = _del_table_name(op.to_name)
+
         if dialect == "mssql":
             ddl_statements.append(f"EXEC sp_rename '[{op.schema_}].[{op.from_name}]', '{op.to_name}'")
+            ddl_statements.append(f"EXEC sp_rename '[{op.schema_}].[{old_upd}]', '{new_upd}'")
+            ddl_statements.append(f"EXEC sp_rename '[{op.schema_}].[{old_del}]', '{new_del}'")
         else:
             ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.from_name} RENAME TO {op.to_name}")
+            ddl_statements.append(f'ALTER TABLE {op.schema_}."{old_upd}" RENAME TO "{new_upd}"')
+            ddl_statements.append(f'ALTER TABLE {op.schema_}."{old_del}" RENAME TO "{new_del}"')
 
         table_obj = live.tables.pop(old_key)
         table_obj.name = op.to_name
         live.tables[new_key] = table_obj
+
+        if _table_key(op.schema_, old_upd) in live.tables:
+            upd_obj = live.tables.pop(_table_key(op.schema_, old_upd))
+            upd_obj.name = new_upd
+            live.tables[_table_key(op.schema_, new_upd)] = upd_obj
+
+        if _table_key(op.schema_, old_del) in live.tables:
+            del_obj = live.tables.pop(_table_key(op.schema_, old_del))
+            del_obj.name = new_del
+            live.tables[_table_key(op.schema_, new_del)] = del_obj
+
         desc = f"Переименована таблица '{old_key}' -> '{new_key}'"
 
     elif isinstance(op, TransferTableOp):
@@ -179,21 +267,48 @@ def _build_ddl_and_update_state(
         if new_key in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{new_key}' уже существует в схеме '{op.to_schema}'")
 
+        upd_name = _upd_table_name(op.table)
+        del_name = _del_table_name(op.table)
+
         if dialect == "mssql":
             ddl_statements.append(f"ALTER SCHEMA [{op.to_schema}] TRANSFER [{op.from_schema}].[{op.table}]")
+            ddl_statements.append(f"ALTER SCHEMA [{op.to_schema}] TRANSFER [{op.from_schema}].[{upd_name}]")
+            ddl_statements.append(f"ALTER SCHEMA [{op.to_schema}] TRANSFER [{op.from_schema}].[{del_name}]")
         else:
-            # В Oracle перенос объекта между пользователями через создание и копирование
             ddl_statements.append(
                 f'CREATE TABLE "{op.to_schema}"."{op.table}" AS SELECT * FROM "{op.from_schema}"."{op.table}"'
             )
             ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{op.table}" CASCADE CONSTRAINTS')
+            ddl_statements.append(
+                f'CREATE TABLE "{op.to_schema}"."{upd_name}" AS SELECT * FROM "{op.from_schema}"."{upd_name}"'
+            )
+            ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{upd_name}" CASCADE CONSTRAINTS')
+            ddl_statements.append(
+                f'CREATE TABLE "{op.to_schema}"."{del_name}" AS SELECT * FROM "{op.from_schema}"."{del_name}"'
+            )
+            ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{del_name}" CASCADE CONSTRAINTS')
 
         table_obj = live.tables.pop(old_key)
         table_obj.schema_ = op.to_schema
         live.tables[new_key] = table_obj
+
+        if _table_key(op.from_schema, upd_name) in live.tables:
+            upd_obj = live.tables.pop(_table_key(op.from_schema, upd_name))
+            upd_obj.schema_ = op.to_schema
+            live.tables[_table_key(op.to_schema, upd_name)] = upd_obj
+
+        if _table_key(op.from_schema, del_name) in live.tables:
+            del_obj = live.tables.pop(_table_key(op.from_schema, del_name))
+            del_obj.schema_ = op.to_schema
+            live.tables[_table_key(op.to_schema, del_name)] = del_obj
+
         desc = f"Перенесена таблица '{op.table}' из схемы '{op.from_schema}' в '{op.to_schema}'"
 
     elif isinstance(op, AddColumnOp):
+        if op.column.name in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
+            raise SchemaEvolutionError(
+                step_index, op.op, f"Колонка '{op.column.name}' является системной технической колонкой и не может быть добавлена вручную"
+            )
         key = _table_key(op.schema_, op.table)
         if key not in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{key}' не найдена")
@@ -210,9 +325,14 @@ def _build_ddl_and_update_state(
             ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.table} ADD ({op.column.name} {col_type_sql})")
 
         table_obj.columns.append(op.column)
-        desc = f"Добавлена колонка '{op.column.name}' ({op.column.type}) в таблицу '{key}'"
+        ddl_statements.extend(_recreate_audit_tables_ddl(table_obj, dialect, live))
+        desc = f"Добавлена колонка '{op.column.name}' ({op.column.type}) в таблицу '{key}', таблицы аудита пересозданы"
 
     elif isinstance(op, DropColumnOp):
+        if op.name in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
+            raise SchemaEvolutionError(
+                step_index, op.op, f"Запрещено удалять системную техническую колонку '{op.name}'"
+            )
         key = _table_key(op.schema_, op.table)
         if key not in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{key}' не найдена")
@@ -228,9 +348,14 @@ def _build_ddl_and_update_state(
             ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.table} DROP COLUMN {op.name}")
 
         table_obj.columns = [c for c in table_obj.columns if c.name != op.name]
-        desc = f"Удалена колонка '{op.name}' из таблицы '{key}'"
+        ddl_statements.extend(_recreate_audit_tables_ddl(table_obj, dialect, live))
+        desc = f"Удалена колонка '{op.name}' из таблицы '{key}', таблицы аудита пересозданы"
 
     elif isinstance(op, RenameColumnOp):
+        if op.from_name in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN) or op.to_name in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
+            raise SchemaEvolutionError(
+                step_index, op.op, "Запрещено переименовывать системную техническую колонку"
+            )
         key = _table_key(op.schema_, op.table)
         if key not in live.tables:
             raise SchemaEvolutionError(step_index, op.op, f"Таблица '{key}' не найдена")
@@ -251,7 +376,8 @@ def _build_ddl_and_update_state(
             if c.name == op.from_name:
                 c.name = op.to_name
         table_obj.primary_key = [op.to_name if pk == op.from_name else pk for pk in table_obj.primary_key]
-        desc = f"Переименована колонка '{op.from_name}' -> '{op.to_name}' в таблице '{key}'"
+        ddl_statements.extend(_recreate_audit_tables_ddl(table_obj, dialect, live))
+        desc = f"Переименована колонка '{op.from_name}' -> '{op.to_name}' в таблице '{key}', таблицы аудита пересозданы"
 
     return ddl_statements, desc
 

@@ -150,7 +150,7 @@ EOF
     sleep 2
   done
 
-  python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source mssql
+  SYDAFA_E2E_PREFIX="$SRC_PREFIX" python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source mssql
   local rc=$?
   if [ $rc -ne 0 ]; then
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -208,7 +208,7 @@ EOF
     sleep 3
   done
 
-  python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source oracle
+  SYDAFA_E2E_PREFIX="$SRC_PREFIX" python3 test/test_e2e_source.py --url "http://localhost:${TEST_PORT}" --source oracle
   local rc=$?
   if [ $rc -ne 0 ]; then
     TOTAL_FAIL=$((TOTAL_FAIL + 1))

@@ -59,6 +59,33 @@ def append_evolution_log(source: str, entry: dict) -> None:
     log_file.write_text(json.dumps(logs, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def get_next_batch_id(source: str) -> int:
+    """Атомарно выделяет следующий целочисленный идентификатор батча/инкремента для источника."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    seq_file = STATE_DIR / f"batch_sequence.{source}.json"
+    current_val = 0
+    if seq_file.exists():
+        try:
+            data = json.loads(seq_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                current_val = int(data.get("current_batch_id", 0))
+        except Exception as e:
+            logger.warning("Не удалось прочитать batch_sequence для '%s': %s", source, e)
+    next_val = current_val + 1
+    seq_file.write_text(json.dumps({"current_batch_id": next_val}, indent=2) + "\n", encoding="utf-8")
+    return next_val
+
+
+def reset_batch_sequence(source: str) -> None:
+    """Сбрасывает сиквенс батчей для указанного источника."""
+    seq_file = STATE_DIR / f"batch_sequence.{source}.json"
+    if seq_file.exists():
+        try:
+            seq_file.unlink()
+        except Exception:
+            pass
+
+
 def reset_memory_cache(source: str) -> None:
     global _live_schemas
     if source in _live_schemas:
@@ -69,3 +96,4 @@ def reset_memory_cache(source: str) -> None:
             log_file.unlink()
         except Exception:
             pass
+    reset_batch_sequence(source)

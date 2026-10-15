@@ -1,6 +1,8 @@
 """Сквозное e2e тестирование API sydafa для конкретного источника СУБД."""
 import argparse
 import json
+import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -50,6 +52,47 @@ def http(method: str, url: str, body=None, headers=None, timeout: int = 300):
         return e.code, parsed
     except Exception as e:
         return 0, str(e)
+
+
+def _sydafa_container(prefix: str) -> str:
+    """Имя контейнера sydafa по префиксу тестового прогона (test-<TEST_ID>-)."""
+    return f"sydafa-{prefix.rstrip('-')}"
+
+
+def _tbl(source: str, schema: str, name: str) -> str:
+    """Квалифицированное имя таблицы для диалекта источника."""
+    return f"[{schema}].[{name}]" if source == "mssql" else f'{schema}."{name}"'
+
+
+def _col(source: str, name: str) -> str:
+    """Имя колонки с учетом диалекта (системные колонки с _ квотируются в Oracle)."""
+    if source == "mssql":
+        return f"[{name}]"
+    return f'"{name}"' if name.startswith("_") else name
+
+
+def scalar(source: str, prefix: str, sql: str) -> str:
+    """Выполняет скалярный SELECT через python-клиент (pymssql/oracledb) внутри контейнера sydafa."""
+    if source == "mssql":
+        code = (
+            "import sys, pymssql; "
+            "c=pymssql.connect(server='sydafa-src-mssql-mssql',port=1433,user='sydafa',password='sydafa',database='sydafa'); "
+            "cur=c.cursor(); cur.execute(sys.argv[1]); row=cur.fetchone(); print(row[0] if row is not None else 'NULL')"
+        )
+    else:
+        code = (
+            "import sys, oracledb; "
+            "dsn=oracledb.makedsn('sydafa-src-oracle-oracle',1521,service_name='sydafa'); "
+            "c=oracledb.connect(user='sydafa',password='sydafa',dsn=dsn); "
+            "cur=c.cursor(); cur.execute(sys.argv[1]); row=cur.fetchone(); print(row[0] if row is not None else 'NULL')"
+        )
+    r = subprocess.run(
+        ["docker", "exec", _sydafa_container(prefix), "python3", "-c", code, sql],
+        capture_output=True, text=True, timeout=300,
+    )
+    if r.returncode != 0:
+        return f"ERR:{r.stderr.strip()[:160]}"
+    return r.stdout.strip()
 
 
 def wait_ready(base_url: str, source: str, timeout: int = 180):
@@ -127,6 +170,14 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: exec create schema & tables", code, 200)
     check(f"{source}: executed 3 DDL ops", res.get("executed") if isinstance(res, dict) else None, 3)
 
+    # 3.1. Системная колонка _batch_id в main и пустые таблицы аудита _upd_ / _del_
+    code, schema_meta = http("GET", f"{base_url}/sources/{source}/schema")
+    tables_meta = schema_meta.get("tables", {}) if isinstance(schema_meta, dict) else {}
+    cat_cols = [c["name"] for c in tables_meta.get(f"{schema_name}.categories", {}).get("columns", [])]
+    check(f"{source}: main table has _batch_id", "_batch_id" in cat_cols, True)
+    check(f"{source}: _upd_categories exists", f"{schema_name}._upd_categories" in tables_meta, True)
+    check(f"{source}: _del_categories exists", f"{schema_name}._del_categories" in tables_meta, True)
+
     # 4. DML: Наполнение данными (append) с FK связями
     append_ops = [
         {"op": "append", "schema": schema_name, "table": "categories", "rows": 3, "new_key_ratio": 0.0},
@@ -148,6 +199,19 @@ def run_source_e2e(base_url: str, source: str):
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": update_ops})
     check(f"{source}: exec update rows", code, 200)
 
+    # 5.1. Снимок в _upd_: _exec_batch_id == main._batch_id и сохранение старого _batch_id
+    prefix = os.environ.get("SYDAFA_E2E_PREFIX", "")
+    if prefix:
+        main_batch = scalar(source, prefix, f"SELECT {_col(source, '_batch_id')} FROM {_tbl(source, schema_name, 'categories')} WHERE {_col(source, 'cat_id')}=1")
+        upd_exec = scalar(source, prefix, f"SELECT {_col(source, '_exec_batch_id')} FROM {_tbl(source, schema_name, '_upd_categories')} WHERE {_col(source, 'cat_id')}=1")
+        upd_old_batch = scalar(source, prefix, f"SELECT {_col(source, '_batch_id')} FROM {_tbl(source, schema_name, '_upd_categories')} WHERE {_col(source, 'cat_id')}=1")
+        upd_old_name = scalar(source, prefix, f"SELECT {_col(source, 'cat_name')} FROM {_tbl(source, schema_name, '_upd_categories')} WHERE {_col(source, 'cat_id')}=1")
+        check(f"{source}: _upd._exec_batch_id == main._batch_id", upd_exec, main_batch)
+        check(f"{source}: _upd preserves old _batch_id", str(upd_old_batch) != str(upd_exec), True)
+        check(f"{source}: _upd snapshot is pre-update", str(upd_old_name) != "PremiumCategory", True)
+    else:
+        print(f"SKIP {source}: _upd snapshot checks (SYDAFA_E2E_PREFIX not set)")
+
     # 6. DML: Delete по предикату
     delete_ops = [
         {
@@ -160,6 +224,18 @@ def run_source_e2e(base_url: str, source: str):
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": delete_ops})
     check(f"{source}: exec delete item", code, 200)
+
+    # 6.1. Удаленная строка сохранена в _del_
+    if prefix:
+        del_count = scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, '_del_items')} WHERE {_col(source, 'item_id')}=1")
+        main_count = scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, 'items')} WHERE {_col(source, 'item_id')}=1")
+        del_exec = scalar(source, prefix, f"SELECT {_col(source, '_exec_batch_id')} FROM {_tbl(source, schema_name, '_del_items')} WHERE {_col(source, 'item_id')}=1")
+        check(f"{source}: deleted row archived in _del_items", del_count, "1")
+        check(f"{source}: deleted row removed from main", main_count, "0")
+        try:
+            check(f"{source}: _del snapshot has _exec_batch_id > 0", int(del_exec) > 0, True)
+        except ValueError:
+            check(f"{source}: _del snapshot has _exec_batch_id > 0", False, True)
 
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409
@@ -213,6 +289,17 @@ def run_source_e2e(base_url: str, source: str):
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": complex_evolve})
     check(f"{source}: complex evolve (add+rename) -> 200", code, 200)
+
+    # 8.1. Пересоздание пустых _upd_ и _del_ после add_column
+    code, schema_meta = http("GET", f"{base_url}/sources/{source}/schema")
+    tables_meta = schema_meta.get("tables", {}) if isinstance(schema_meta, dict) else {}
+    upd_items_cols = [c["name"] for c in tables_meta.get(f"{schema_name}._upd_items", {}).get("columns", [])]
+    del_items_cols = [c["name"] for c in tables_meta.get(f"{schema_name}._del_items", {}).get("columns", [])]
+    check(f"{source}: _upd_items recreated with score", "score" in upd_items_cols, True)
+    check(f"{source}: _del_items recreated with score", "score" in del_items_cols, True)
+    if prefix:
+        check(f"{source}: _upd_items empty after recreate", scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, '_upd_items')}"), "0")
+        check(f"{source}: _del_items empty after recreate", scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, '_del_items')}"), "0")
 
     # 9. All-or-Nothing Rollback:
     # Батч с корректной операцией и некорректной (пробел в имени колонки)
