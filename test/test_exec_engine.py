@@ -172,6 +172,51 @@ class TestBatchIdAudit(unittest.TestCase):
         self.assertNotIn(" WHERE ", archive_sql)  # архивируются все строки
         self.assertIn("TRUNCATE TABLE demo.customers", conn.cur.executed[1][0])
 
+    def test_interleaved_ddl_and_dml_flow(self):
+        """Проверка возможности чередования DDL и DML в едином эволюционном сценарии."""
+        live = LiveSchema(schemas=["demo"], tables={})
+        # 1. create_table
+        create_op = CreateTableOp(
+            schema="demo",
+            name="contracts",
+            primary_key=["id"],
+            columns=[
+                ColumnSpec(name="id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="amount", type="decimal(10,2)", generator={"kind": "random_decimal", "min": 100, "max": 200}),
+            ],
+            foreign_keys=[],
+        )
+        stmts, _ = _build_ddl_and_update_state(create_op, "mssql", live, 0)
+        self.assertTrue(len(stmts) > 0)
+        self.assertIn("demo.contracts", live.tables)
+
+        # 2. add_column (DDL после создания)
+        from app.models import AddColumnOp
+        add_col_op = AddColumnOp(
+            schema="demo",
+            table="contracts",
+            column=ColumnSpec(name="status", type="string", generator={"kind": "choice", "values": ["NEW"]}),
+        )
+        stmts2, _ = _build_ddl_and_update_state(add_col_op, "mssql", live, 1)
+        self.assertTrue(len(stmts2) > 0)
+        self.assertIn("status", live.tables["demo.contracts"].column_names)
+
+        # 3. update_rows (DML для добавленной колонки)
+        conn = FakeConn()
+        updated = update_rows_conn(
+            conn,
+            "mssql",
+            live,
+            "demo",
+            "contracts",
+            conditions=[Condition(column="id", operator="=", value=1)],
+            set_values={"status": "ACTIVE"},
+            batch_id=2,
+        )
+        self.assertEqual(updated, 1)
+        update_sql, _ = conn.cur.executed[1]
+        self.assertIn("[status] = %s", update_sql)
+
 
 if __name__ == "__main__":
     unittest.main()

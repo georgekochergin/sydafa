@@ -11,7 +11,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 > **Каноническая спецификация операций и моделей данных:**
 > Полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
-> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`) и правил валидации
+> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`) и правил валидации
 > находится в основном файле документации проекта: [README.md](../../../README.md) (Раздел 9 «Единый метод исполнения: `POST /sources/{source}/exec`»).
 
 ## Формат ответа (обязательный)
@@ -35,8 +35,9 @@ description: Use when the user asks to generate JSON request bodies for the syda
 ## Целевой эндпоинт: `POST /sources/{source}/exec`
 
 Принимает `{"operations": [...]}` — упорядоченный батч DDL и DML, который
-выполняется в единой транзакции (All-or-Nothing). Порядок операций имеет
-значение: сначала DDL (создание схем, таблиц, колонок, переименования), затем DML (`append`, `update`, `delete`, `truncate`).
+выполняется в единой транзакции (All-or-Nothing). Операции выполняются строго последовательно в порядке списка:
+поддерживается любое логичное чередование DDL и DML (например: `create_table` → первичное наполнение `append` → эволюция `add_column` → `update`).
+Важно лишь соблюдать естественную причинную зависимость: схема создается до таблицы, таблица — до строк в ней, колонка — до операций с ней.
 
 `{source}` — имя источника (`mssql`, `oracle` или имя инстанса, например `billing`, `crm`).
 

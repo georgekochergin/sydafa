@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, Self, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # --- Конфигурация источников ---
@@ -22,28 +22,68 @@ class SourceConfig(BaseModel):
 
 # --- Генераторы синтетических данных ---
 
-class SequenceGenerator(BaseModel):
+DateDim = Literal["y", "m", "d"]
+AnchorPoint = Literal["start_of_year", "today", "start_of_quarter", "start_of_month", "end_of_year"]
+
+
+class BaseGenerator(BaseModel):
+    null_ratio: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="Доля NULL-значений от 0.0 до 1.0 (вероятность генерации NULL)"
+    )
+
+
+class SequenceGenerator(BaseGenerator):
     kind: Literal["sequence"] = "sequence"
 
 
-class FakerGenerator(BaseModel):
+class FakerGenerator(BaseGenerator):
     kind: Literal["faker"] = "faker"
     provider: str = Field(default="word", description="Метод Faker: company, name, word, address, email")
+    locale: str = Field(default="ru_RU", description="Локаль Faker, по умолчанию ru_RU")
 
 
-class ChoiceGenerator(BaseModel):
+class ChoiceGenerator(BaseGenerator):
     kind: Literal["choice"] = "choice"
     values: list[Any] = Field(min_length=1, description="Список допустимых значений: ['Retail', 'Corporate', 'VIP']")
+    weights: list[float] | None = Field(default=None, description="Относительные веса выбора для значений values")
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> Self:
+        if self.weights is not None:
+            if len(self.weights) != len(self.values):
+                raise ValueError(
+                    f"Количество весов weights ({len(self.weights)}) должно совпадать с количеством значений values ({len(self.values)})"
+                )
+            if any(w < 0 for w in self.weights):
+                raise ValueError("Веса weights не могут быть отрицательными")
+            if sum(self.weights) == 0:
+                raise ValueError("Сумма весов weights должна быть больше 0")
+        return self
 
 
-class RandomDecimalGenerator(BaseModel):
+class RandomDecimalGenerator(BaseGenerator):
     kind: Literal["random_decimal"] = "random_decimal"
     min: float = 0.0
     max: float = 100000.0
 
 
-class RandomDateGenerator(BaseModel):
+class RandomDateGenerator(BaseGenerator):
     kind: Literal["random_date"] = "random_date"
+    anchor: AnchorPoint = Field(
+        default="start_of_year",
+        description="Опорная точка: start_of_year, today, start_of_quarter, start_of_month, end_of_year",
+    )
+    dim: DateDim = Field(default="d", description="Размерность смещения: 'y' (годы), 'm' (месяцы), 'd' (дни)")
+    min_offset: int | None = Field(default=None, description="Минимальное смещение от anchor в единицах dim")
+    max_offset: int | None = Field(default=None, description="Максимальное смещение от anchor в единицах dim")
+
+
+class DateOffsetGenerator(BaseGenerator):
+    kind: Literal["date_offset"] = "date_offset"
+    ref_column: str = Field(description="Имя базовой колонки с датой в той же строке")
+    dim: DateDim = Field(default="y", description="Размерность смещения: 'y' (годы), 'm' (месяцы), 'd' (дни)")
+    min_offset: int = Field(default=1, description="Минимальное смещение (по умолчанию 1, строго > 0)")
+    max_offset: int = Field(default=5, description="Максимальное смещение")
 
 
 GeneratorSpec = Annotated[
@@ -53,6 +93,7 @@ GeneratorSpec = Annotated[
         ChoiceGenerator,
         RandomDecimalGenerator,
         RandomDateGenerator,
+        DateOffsetGenerator,
     ],
     Field(discriminator="kind"),
 ]
