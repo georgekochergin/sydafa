@@ -38,13 +38,32 @@ def map_type(logical_type: str, dialect: str) -> str:
         ) from exc
 
 
+def quote_ident(ident: str, dialect: str) -> str:
+    """Экранирует имя колонки или таблицы в зависимости от диалекта СУБД."""
+    if dialect == "mssql":
+        return f"[{ident}]"
+    if ident.startswith("_"):
+        return f'"{ident}"'
+    return ident
+
+
+def qualify_table(schema: str, table: str, dialect: str) -> str:
+    """Формирует полное квалифицированное имя таблицы schema.table с учетом диалекта."""
+    if dialect == "mssql":
+        return f"[{schema}].[{table}]"
+    if table.startswith("_"):
+        return f'{schema}."{table}"'
+    return f"{schema}.{table}"
+
+
 def render_create_table(table: TableSchema, dialect: str) -> str:
     """Генерирует CREATE TABLE для таблицы с учётом её схемы и диалекта СУБД."""
+    qualified = qualify_table(table.schema_, table.name, dialect)
     if dialect == "mssql":
-        qualified = f"[{table.schema_}].[{table.name}]"
         col_lines = [f"  [{c.name}] {map_type(c.type, dialect)}" for c in table.columns]
-        pk_cols = ", ".join(f"[{c}]" for c in table.primary_key)
-        col_lines.append(f"  CONSTRAINT [pk_{table.schema_}_{table.name}] PRIMARY KEY ({pk_cols})")
+        if table.primary_key:
+            pk_cols = ", ".join(f"[{c}]" for c in table.primary_key)
+            col_lines.append(f"  CONSTRAINT [pk_{table.schema_}_{table.name}] PRIMARY KEY ({pk_cols})")
         for fk in table.foreign_keys:
             cols = ", ".join(f"[{c}]" for c in fk.columns)
             ref_schema = fk.ref_schema or table.schema_
@@ -54,14 +73,14 @@ def render_create_table(table: TableSchema, dialect: str) -> str:
                 f"  CONSTRAINT [{fk_name}] FOREIGN KEY ({cols}) REFERENCES [{ref_schema}].[{fk.ref_table}] ({ref_cols})"
             )
     else:  # oracle
-        qualified = f"{table.schema_}.{table.name}"
-        col_lines = [f"  {c.name} {map_type(c.type, dialect)}" for c in table.columns]
-        pk_cols = ", ".join(f"{c}" for c in table.primary_key)
-        col_lines.append(f"  CONSTRAINT pk_{table.schema_}_{table.name} PRIMARY KEY ({pk_cols})")
+        col_lines = [f"  {quote_ident(c.name, dialect)} {map_type(c.type, dialect)}" for c in table.columns]
+        if table.primary_key:
+            pk_cols = ", ".join(quote_ident(c, dialect) for c in table.primary_key)
+            col_lines.append(f"  CONSTRAINT pk_{table.schema_}_{table.name} PRIMARY KEY ({pk_cols})")
         for fk in table.foreign_keys:
-            cols = ", ".join(f"{c}" for c in fk.columns)
+            cols = ", ".join(quote_ident(c, dialect) for c in fk.columns)
             ref_schema = fk.ref_schema or table.schema_
-            ref_cols = ", ".join(f"{c}" for c in fk.ref_columns)
+            ref_cols = ", ".join(quote_ident(c, dialect) for c in fk.ref_columns)
             fk_name = f"fk_{table.schema_}_{table.name}_{'_'.join(fk.columns)}"[:30]
             col_lines.append(
                 f"  CONSTRAINT {fk_name} FOREIGN KEY ({cols}) REFERENCES {ref_schema}.{fk.ref_table} ({ref_cols})"

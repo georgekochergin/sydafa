@@ -4,12 +4,14 @@ from __future__ import annotations
 import unittest
 from app.models import (
     AddColumnOp,
+    BATCH_ID_COLUMN,
     ColumnSpec,
     CreateSchemaOp,
     CreateTableOp,
     DropColumnOp,
     DropSchemaOp,
     DropTableOp,
+    EXEC_BATCH_ID_COLUMN,
     LiveSchema,
     RenameColumnOp,
     RenameSchemaOp,
@@ -38,6 +40,88 @@ class TestSchemaEngine(unittest.TestCase):
         ddl, desc = _build_ddl_and_update_state(op, "oracle", self.live, 0)
         self.assertTrue(any("CREATE USER demo" in stmt for stmt in ddl))
         self.assertIn("demo", self.live.schemas)
+
+    def _create_schema_and_table(self, dialect="mssql"):
+        # Create schema first
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), dialect, self.live, 0)
+
+        # Create table
+        table_op = CreateTableOp(
+            schema="demo",
+            name="customers",
+            primary_key=["customer_id"],
+            columns=[
+                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="name", type="string", generator={"kind": "faker", "provider": "company"}),
+            ],
+        )
+        ddl, desc = _build_ddl_and_update_state(table_op, dialect, self.live, 1)
+        return ddl, desc
+
+    def test_create_table_injects_batch_id_and_audit_tables(self):
+        ddl, _ = self._create_schema_and_table("mssql")
+        customers = self.live.tables["demo.customers"]
+        # Системная колонка _batch_id внедрена в основную таблицу
+        self.assertIn(BATCH_ID_COLUMN, customers.column_names)
+        self.assertEqual(customers.column_names.count(BATCH_ID_COLUMN), 1)
+        # Созданы пустые таблицы аудита _upd_ и _del_
+        self.assertIn("demo._upd_customers", self.live.tables)
+        self.assertIn("demo._del_customers", self.live.tables)
+        self.assertTrue(any("CREATE TABLE [demo].[_upd_customers]" in s for s in ddl))
+        self.assertTrue(any("CREATE TABLE [demo].[_del_customers]" in s for s in ddl))
+        upd = self.live.tables["demo._upd_customers"]
+        self.assertIn(EXEC_BATCH_ID_COLUMN, upd.column_names)
+        self.assertIn(BATCH_ID_COLUMN, upd.column_names)
+        self.assertEqual(upd.primary_key, [])
+
+    def test_create_table_audit_tables_oracle_quoted(self):
+        ddl, _ = self._create_schema_and_table("oracle")
+        self.assertIn("demo._upd_customers", self.live.tables)
+        # В Oracle имена аудит-таблиц с подчеркиванием квотируются
+        self.assertTrue(any('CREATE TABLE demo."_upd_customers"' in s for s in ddl))
+        self.assertTrue(any('CREATE TABLE demo."_del_customers"' in s for s in ddl))
+
+    def test_drop_system_columns_forbidden(self):
+        self._create_schema_and_table("mssql")
+        for col in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
+            with self.subTest(column=col):
+                op = DropColumnOp(schema="demo", table="customers", name=col)
+                with self.assertRaises(SchemaEvolutionError):
+                    _build_ddl_and_update_state(op, "mssql", self.live, 2)
+
+    def test_rename_and_add_system_columns_forbidden(self):
+        self._create_schema_and_table("mssql")
+        # Переименование системной колонки
+        op = RenameColumnOp(schema="demo", table="customers", from_name=BATCH_ID_COLUMN, to_name="batch")
+        with self.assertRaises(SchemaEvolutionError):
+            _build_ddl_and_update_state(op, "mssql", self.live, 2)
+        # Переименование колонки в системное имя
+        op2 = RenameColumnOp(schema="demo", table="customers", from_name="name", to_name=EXEC_BATCH_ID_COLUMN)
+        with self.assertRaises(SchemaEvolutionError):
+            _build_ddl_and_update_state(op2, "mssql", self.live, 3)
+        # Ручное добавление системной колонки
+        op3 = AddColumnOp(schema="demo", table="customers", column=ColumnSpec(name=EXEC_BATCH_ID_COLUMN, type="bigint"))
+        with self.assertRaises(SchemaEvolutionError):
+            _build_ddl_and_update_state(op3, "mssql", self.live, 4)
+
+    def test_recreate_audit_tables_on_add_column(self):
+        self._create_schema_and_table("mssql")
+        add_op = AddColumnOp(
+            schema="demo",
+            table="customers",
+            column=ColumnSpec(name="email", type="string"),
+        )
+        ddl, _ = _build_ddl_and_update_state(add_op, "mssql", self.live, 2)
+        # Аудит-таблицы пересозданы (DROP + CREATE)
+        self.assertIn("DROP TABLE [demo].[_upd_customers]", ddl)
+        self.assertIn("DROP TABLE [demo].[_del_customers]", ddl)
+        self.assertTrue(any("CREATE TABLE [demo].[_upd_customers]" in s for s in ddl))
+        self.assertTrue(any("CREATE TABLE [demo].[_del_customers]" in s for s in ddl))
+        # Пересозданные аудит-таблицы содержат новую колонку и системные колонки
+        upd = self.live.tables["demo._upd_customers"]
+        self.assertIn("email", upd.column_names)
+        self.assertIn(BATCH_ID_COLUMN, upd.column_names)
+        self.assertIn(EXEC_BATCH_ID_COLUMN, upd.column_names)
 
     def test_create_table_and_columns(self):
         # Create schema first

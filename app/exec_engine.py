@@ -25,7 +25,12 @@ from .models import (
     UpdateOp,
 )
 from .schema_engine import SchemaEvolutionError, _build_ddl_and_update_state
-from .schema_state import append_evolution_log, get_live_schema, save_live_schema
+from .schema_state import (
+    append_evolution_log,
+    get_live_schema,
+    get_next_batch_id,
+    save_live_schema,
+)
 from .sources import get_source
 
 logger = logging.getLogger("sydafa.exec_engine")
@@ -51,6 +56,8 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
     initial_live = get_live_schema(source_name)
     live: LiveSchema = copy.deepcopy(initial_live)
 
+    current_batch_id = get_next_batch_id(source_name)
+
     applied_records: list[dict[str, Any]] = []
 
     with get_connection(source_name) as conn:
@@ -58,7 +65,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
             for step_idx, op in enumerate(operations):
                 op_name = getattr(op, "op", "unknown")
                 if isinstance(op, TruncateOp):
-                    truncate_table_conn(conn, dialect, live, op.schema_, op.table, op.cascade)
+                    truncate_table_conn(conn, dialect, live, op.schema_, op.table, op.cascade, current_batch_id)
                     applied_records.append({
                         "step": step_idx,
                         "op": "truncate",
@@ -67,7 +74,9 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, AppendOp):
-                    inserted = append_rows_conn(conn, source_name, dialect, live, op.schema_, op.table, op.rows, op.new_key_ratio)
+                    inserted = append_rows_conn(
+                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, op.new_key_ratio, current_batch_id
+                    )
                     applied_records.append({
                         "step": step_idx,
                         "op": "append",
@@ -77,7 +86,9 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, UpdateOp):
-                    updated = update_rows_conn(conn, dialect, live, op.schema_, op.table, op.predicate, op.set)
+                    updated = update_rows_conn(
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id
+                    )
                     applied_records.append({
                         "step": step_idx,
                         "op": "update",
@@ -87,7 +98,9 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, DeleteOp):
-                    deleted = delete_rows_conn(conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade)
+                    deleted = delete_rows_conn(
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id
+                    )
                     applied_records.append({
                         "step": step_idx,
                         "op": "delete",

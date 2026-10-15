@@ -138,6 +138,10 @@ def reset_source_init(source: str) -> None:
         except Exception as e:
             logger.warning("Не удалось удалить %s: %s", status_file, e)
 
+    # Удаляем сохраненный счетчик батчей
+    from .schema_state import reset_batch_sequence
+    reset_batch_sequence(source)
+
 
 def load_manifest_sources() -> dict[str, Any]:
     """Считывает источники из манифеста sources.json."""
