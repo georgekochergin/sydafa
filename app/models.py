@@ -367,8 +367,9 @@ class UpdateOp(BaseModel):
     op: Literal["update"] = "update"
     schema_: str = Field(alias="schema")
     table: str
-    predicate: list[Condition]
+    predicate: list[Condition] = Field(default_factory=list)
     set: dict[str, Any]
+    random_rows: int | None = Field(default=None, gt=0)
 
     @field_validator("schema_", "table")
     @classmethod
@@ -382,8 +383,9 @@ class DeleteOp(BaseModel):
     op: Literal["delete"] = "delete"
     schema_: str = Field(alias="schema")
     table: str
-    predicate: list[Condition]
+    predicate: list[Condition] = Field(default_factory=list)
     cascade: bool = False
+    random_rows: int | None = Field(default=None, gt=0)
 
     @field_validator("schema_", "table")
     @classmethod
