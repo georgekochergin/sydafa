@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import socket
 import threading
 import time
@@ -38,18 +39,34 @@ def _source_lock(source: str) -> threading.Lock:
         return _locks[source]
 
 
+def sanitize_user_token(token: str | None) -> str:
+    """Очищает пользовательский токен (префикс или имя инстанса) от пробелов, краевых дефисов и спецсимволов."""
+    if not token:
+        return ""
+    # Заменяем недопустимые спецсимволы и пробелы на дефис
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(token).strip())
+    # Убираем дефисы, точки и подчеркивания по краям и приводим к нижнему регистру
+    return cleaned.strip("-._").lower()
+
+
 def container_name_for(config: SourceConfig) -> str:
-    if CONTAINER_PREFIX:
-        p = CONTAINER_PREFIX if CONTAINER_PREFIX.endswith("-") else f"{CONTAINER_PREFIX}-"
-        return f"sydafa-{p}src-{config.type}-{config.name}"
-    return f"sydafa-src-{config.type}-{config.name}"
+    prefix = sanitize_user_token(CONTAINER_PREFIX)
+    src_name = sanitize_user_token(config.name)
+    parts = ["sydafa"]
+    if prefix:
+        parts.append(prefix)
+    parts.extend(["src", config.type, src_name])
+    return "-".join(parts)
 
 
 def volume_name_for(config: SourceConfig) -> str:
-    if CONTAINER_PREFIX:
-        p = CONTAINER_PREFIX if CONTAINER_PREFIX.endswith("-") else f"{CONTAINER_PREFIX}-"
-        return f"sydafa-{p}data-{config.type}-{config.name}"
-    return f"sydafa-data-{config.type}-{config.name}"
+    prefix = sanitize_user_token(CONTAINER_PREFIX)
+    src_name = sanitize_user_token(config.name)
+    parts = ["sydafa"]
+    if prefix:
+        parts.append(prefix)
+    parts.extend(["data", config.type, src_name])
+    return "-".join(parts)
 
 
 def _get_docker_client() -> docker.DockerClient:
