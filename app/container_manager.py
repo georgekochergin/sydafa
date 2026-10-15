@@ -272,7 +272,7 @@ def _get_container(client: docker.DockerClient, name: str):
 
 def wake_up(
     source_name: str,
-    ttl_minutes: int,
+    ttl_minutes: int = DEFAULT_TTL_MINUTES,
     publish: bool = False,
     request_host: str | None = None,
 ) -> dict[str, Any]:

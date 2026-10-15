@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.constants import DEFAULT_TTL_MINUTES
 from app.init_apply import (
     apply_init_for_source,
     check_and_heal_orphaned_state,
@@ -51,12 +52,12 @@ class TestInitApply(unittest.TestCase):
         }
         with patch("app.init_apply.STATE_DIR", self.state), \
              patch("app.init_apply.load_manifest_sources", return_value=manifest_data), \
-             patch("app.container_manager.wake_up") as mock_wake, \
-             patch("app.container_manager.deactivate") as mock_deactivate:
+             patch("app.container_manager.wake_up", autospec=True) as mock_wake, \
+             patch("app.container_manager.deactivate", autospec=True) as mock_deactivate:
             seed_all_sources_on_first_startup()
             self.assertEqual(mock_wake.call_count, 2)
-            mock_wake.assert_any_call("mssql")
-            mock_wake.assert_any_call("crm")
+            mock_wake.assert_any_call("mssql", ttl_minutes=DEFAULT_TTL_MINUTES)
+            mock_wake.assert_any_call("crm", ttl_minutes=DEFAULT_TTL_MINUTES)
             self.assertEqual(mock_deactivate.call_count, 2)
             mock_deactivate.assert_any_call("mssql")
             mock_deactivate.assert_any_call("crm")
@@ -70,12 +71,12 @@ class TestInitApply(unittest.TestCase):
         }
         with patch("app.init_apply.STATE_DIR", self.state), \
              patch("app.init_apply.load_manifest_sources", return_value=manifest_data), \
-             patch("app.container_manager.wake_up") as mock_wake, \
-             patch("app.container_manager.deactivate") as mock_deactivate:
+             patch("app.container_manager.wake_up", autospec=True) as mock_wake, \
+             patch("app.container_manager.deactivate", autospec=True) as mock_deactivate:
             mark_source_initialized("mssql")
             seed_all_sources_on_first_startup()
             # mssql уже инициализирован, должен запуститься только erp
-            mock_wake.assert_called_once_with("erp")
+            mock_wake.assert_called_once_with("erp", ttl_minutes=DEFAULT_TTL_MINUTES)
             mock_deactivate.assert_called_once_with("erp")
             self.assertTrue(is_source_initialized("erp"))
 
@@ -118,11 +119,11 @@ class TestInitApply(unittest.TestCase):
             }
         }
         with patch("app.init_apply.STATE_DIR", self.state), \
-             patch("app.container_manager.purge_source_container_and_volume") as mock_purge, \
+             patch("app.container_manager.purge_source_container_and_volume", autospec=True) as mock_purge, \
              patch("app.init_apply.load_manifest_sources", return_value=manifest_data), \
              patch("app.sources.load_sources") as mock_load_sources, \
-             patch("app.container_manager.wake_up") as mock_wake, \
-             patch("app.container_manager.deactivate") as mock_deactivate:
+             patch("app.container_manager.wake_up", autospec=True) as mock_wake, \
+             patch("app.container_manager.deactivate", autospec=True) as mock_deactivate:
             mark_source_initialized("mssql")
             self.assertTrue(is_source_initialized("mssql"))
 
@@ -133,7 +134,7 @@ class TestInitApply(unittest.TestCase):
 
             mock_purge.assert_called_once_with("mssql")
             mock_load_sources.assert_called_once()
-            mock_wake.assert_called_once_with("mssql")
+            mock_wake.assert_called_once_with("mssql", ttl_minutes=DEFAULT_TTL_MINUTES)
             mock_deactivate.assert_called_once_with("mssql")
             self.assertTrue(is_source_initialized("mssql"))
 
