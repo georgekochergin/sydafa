@@ -336,7 +336,7 @@ def get_runtime_status(source_name: str, request_host: str | None = None) -> dic
 
 
 def sweep_idle_sources() -> None:
-    """Фоновый таймер: остановка по TTL и авто-подхват ручных запусков."""
+    """Фоновый таймер: остановка по TTL и немедленная остановка несанкционированно запущенных контейнеров."""
     from .sources import get_source, source_names
 
     client = _get_docker_client()
@@ -352,17 +352,16 @@ def sweep_idle_sources() -> None:
             except Exception:
                 pass
 
-            # Контейнер включен вручную вне API sydafa
+            # Контейнер включен вручную вне API sydafa или без активного TTL
             if container.status == "running" and (status.get("state") != "running" or not status.get("activated_until")):
-                logger.info("Обнаружен запущенный контейнер '%s' без активного TTL. Назначен дефолтный TTL.", cname)
-                conn_details = build_connection_details(name, config)
-                source_status.mark_running(
-                    name,
-                    DEFAULT_TTL_MINUTES,
-                    config.external_port,
-                    bool(config.external_port),
-                    connection=conn_details.model_dump(),
+                logger.warning(
+                    "Обнаружен запущенный контейнер '%s' без активной активации через API sydafa. Немедленная остановка.",
+                    cname,
                 )
+                try:
+                    deactivate(name)
+                except Exception:
+                    logger.exception("Не удалось остановить контейнер '%s'", cname)
                 continue
 
         if source_status.is_expired(status):
