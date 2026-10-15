@@ -342,6 +342,32 @@ def deactivate(source_name: str) -> dict[str, Any]:
         return source_status.mark_idle(source_name)
 
 
+def purge_source_container_and_volume(source_name: str) -> None:
+    """Полностью удаляет контейнер СУБД и связанный именованный том данных источника."""
+    config = get_source(source_name)
+    with _source_lock(source_name):
+        client = _get_docker_client()
+        cname = container_name_for(config)
+        vname = volume_name_for(config)
+
+        container = _get_container(client, cname)
+        if container is not None:
+            logger.info("Принудительное удаление контейнера %s для реинициализации...", cname)
+            try:
+                container.remove(force=True, v=True)
+            except Exception as e:
+                logger.warning("Ошибка удаления контейнера %s: %s", cname, e)
+
+        try:
+            vol = client.volumes.get(vname)
+            logger.info("Удаление тома данных %s для источника '%s'...", vname, source_name)
+            vol.remove(force=True)
+        except NotFound:
+            pass
+        except Exception as e:
+            logger.warning("Ошибка удаления тома данных %s: %s", vname, e)
+
+
 def get_runtime_status(source_name: str, request_host: str | None = None) -> dict[str, Any]:
     config = get_source(source_name)
     status = source_status.load_status(source_name)

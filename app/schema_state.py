@@ -57,3 +57,15 @@ def append_evolution_log(source: str, entry: dict) -> None:
             logs = []
     logs.append(entry)
     log_file.write_text(json.dumps(logs, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def reset_memory_cache(source: str) -> None:
+    global _live_schemas
+    if source in _live_schemas:
+        del _live_schemas[source]
+    log_file = STATE_DIR / f"schema_evolution_log.{source}.json"
+    if log_file.exists():
+        try:
+            log_file.unlink()
+        except Exception:
+            pass

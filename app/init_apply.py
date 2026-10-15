@@ -111,6 +111,34 @@ def mark_source_initialized(source: str) -> None:
     logger.info("Зафиксирован сид для источника '%s' (applied_at=%s)", source, now_iso)
 
 
+def reset_source_init(source: str) -> None:
+    """Сбрасывает факт инициализации и файлы состояния для конкретного источника."""
+    data = _load_state_data()
+    applied_sources = data.get("applied_sources", {})
+    if isinstance(applied_sources, dict) and source in applied_sources:
+        del applied_sources[source]
+        _save_state_data(data)
+        logger.info("Сброшена запись инициализации для '%s' в init_state.json", source)
+
+    # Удаляем сохраненную live-схему
+    schema_file = STATE_DIR / f"live_schema.{source}.json"
+    if schema_file.exists():
+        try:
+            schema_file.unlink()
+            logger.info("Удален файл live_schema для '%s'", source)
+        except Exception as e:
+            logger.warning("Не удалось удалить %s: %s", schema_file, e)
+
+    # Удаляем сохраненный статус источника
+    status_file = STATE_DIR / f"source_status.{source}.json"
+    if status_file.exists():
+        try:
+            status_file.unlink()
+            logger.info("Удален файл source_status для '%s'", source)
+        except Exception as e:
+            logger.warning("Не удалось удалить %s: %s", status_file, e)
+
+
 def load_manifest_sources() -> dict[str, Any]:
     """Считывает источники из манифеста sources.json."""
     sources_path = find_sources_file()
@@ -275,3 +303,47 @@ def seed_all_sources_on_first_startup() -> None:
     logger.info(
         "Инициализация завершена. Все СУБД остановлены."
     )
+
+
+def reinit_source(source_name: str) -> dict[str, Any]:
+    """Выполняет полный точечный сброс и повторный Genesis Seed для указанного источника.
+    
+    1. Останавливает и удаляет контейнер СУБД источника и его именованный том данных.
+    2. Очищает live_schema, source_status и запись в applied_sources.
+    3. Перечитывает манифест sources.json и выполняет bootstrap + накат свежих operations.
+    4. Немедленно останавливает СУБД источника для освобождения оперативной памяти.
+    """
+    from . import container_manager, schema_state, sources
+
+    logger.warning(">>> Начало процедуры РЕИНИЦИАЛИЗАЦИИ источника '%s'...", source_name)
+
+    # 1. Зачистка контейнера и тома данных
+    container_manager.purge_source_container_and_volume(source_name)
+
+    # 2. Сброс метаданных состояния в /state и памяти
+    reset_source_init(source_name)
+    schema_state.reset_memory_cache(source_name)
+
+    # 3. Перечитывание реестра источников на случай обновления sources.json
+    sources.load_sources()
+
+    # 4. Выполнение первичного сида
+    manifest = load_manifest_sources()
+    src_spec = manifest.get(source_name, {})
+    raw_ops = src_spec.get("operations", []) if isinstance(src_spec, dict) else []
+
+    logger.info("Реинициализация '%s': запуск чистой базы и применение %d операций...", source_name, len(raw_ops))
+    container_manager.wake_up(source_name)
+
+    logger.info("Реинициализация '%s': глушение контейнера для возврата 0 MB RAM...", source_name)
+    container_manager.deactivate(source_name)
+    mark_source_initialized(source_name)
+
+    ts = get_source_init_timestamp(source_name) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "status": "reinitialized",
+        "source": source_name,
+        "applied_at": ts,
+        "operations_executed": len(raw_ops),
+        "message": f"Источник '{source_name}' успешно зачищен и реинициализирован с {len(raw_ops)} операциями.",
+    }

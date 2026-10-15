@@ -13,6 +13,8 @@ from app.init_apply import (
     get_source_init_timestamp,
     is_source_initialized,
     mark_source_initialized,
+    reinit_source,
+    reset_source_init,
     seed_all_sources_on_first_startup,
 )
 
@@ -106,6 +108,34 @@ class TestInitApply(unittest.TestCase):
             check_and_heal_orphaned_state()
             mock_container.remove.assert_called_once_with(force=True, v=True)
             mock_volume.remove.assert_called_once_with(force=True)
+
+
+    def test_reinit_source_flow(self):
+        manifest_data = {
+            "mssql": {
+                "type": "mssql",
+                "operations": [{"op": "create_schema", "name": "fresh"}]
+            }
+        }
+        with patch("app.init_apply.STATE_DIR", self.state), \
+             patch("app.container_manager.purge_source_container_and_volume") as mock_purge, \
+             patch("app.init_apply.load_manifest_sources", return_value=manifest_data), \
+             patch("app.sources.load_sources") as mock_load_sources, \
+             patch("app.container_manager.wake_up") as mock_wake, \
+             patch("app.container_manager.deactivate") as mock_deactivate:
+            mark_source_initialized("mssql")
+            self.assertTrue(is_source_initialized("mssql"))
+
+            res = reinit_source("mssql")
+            self.assertEqual(res["status"], "reinitialized")
+            self.assertEqual(res["source"], "mssql")
+            self.assertEqual(res["operations_executed"], 1)
+
+            mock_purge.assert_called_once_with("mssql")
+            mock_load_sources.assert_called_once()
+            mock_wake.assert_called_once_with("mssql")
+            mock_deactivate.assert_called_once_with("mssql")
+            self.assertTrue(is_source_initialized("mssql"))
 
 
 if __name__ == "__main__":

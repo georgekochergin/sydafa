@@ -141,6 +141,24 @@ class TestSydafaAPI(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["state"], "idle")
 
+    def test_reinit_source_endpoint(self):
+        reinit_res = {
+            "status": "reinitialized",
+            "source": "mssql",
+            "applied_at": "2026-10-15T12:00:00Z",
+            "operations_executed": 2,
+            "message": "Источник 'mssql' успешно зачищен и реинициализирован с 2 операциями.",
+        }
+        with patch("app.sources.source_names", return_value=["mssql"]), \
+             patch("app.init_apply.reinit_source", return_value=reinit_res) as mock_reinit:
+            resp = self.client.post("/sources/mssql/reinit")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "reinitialized")
+            self.assertEqual(data["source"], "mssql")
+            self.assertEqual(data["operations_executed"], 2)
+            mock_reinit.assert_called_once_with("mssql")
+
     def test_list_sources(self):
         with patch("app.sources.source_names", return_value=["billing", "crm"]):
             resp = self.client.get("/sources")

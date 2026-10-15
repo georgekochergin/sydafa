@@ -16,6 +16,7 @@ from .models import (
     LiveSchema,
     SourceInfo,
     SourceLifecycleStatus,
+    SourceReinitResult,
     TableRef,
 )
 
@@ -169,6 +170,19 @@ def deactivate_source(source: str):
         return SourceLifecycleStatus(**container_manager.deactivate(source))
     except Exception as exc:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Не удалось деактивировать '{source}': {exc}") from exc
+
+
+@app.post("/sources/{source}/reinit", response_model=SourceReinitResult)
+def reinit_source_endpoint(source: str):
+    """Сбрасывает контейнер, том данных и повторно выполняет начальный сид из sources.json."""
+    _assert_source(source)
+    try:
+        from . import init_apply
+        res = init_apply.reinit_source(source)
+        return SourceReinitResult(**res)
+    except Exception as exc:
+        logger.exception("Ошибка реинициализации источника '%s'", source)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Не удалось реинициализировать '{source}': {exc}") from exc
 
 
 # ==================== DATA & SCHEMA API (Транзакционный DDL + DML) ====================

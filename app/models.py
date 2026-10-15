@@ -447,3 +447,11 @@ class SourceLifecycleStatus(BaseModel):
     connection: ConnectionDetails | None = None
     host_port: int | None = None
     published: bool = False
+
+
+class SourceReinitResult(BaseModel):
+    status: str = "reinitialized"
+    source: str
+    applied_at: str
+    operations_executed: int
+    message: str
