@@ -32,8 +32,8 @@ flowchart TD
     end
 
     subgraph DockerDBMS["Контейнеры СУБД (Docker Engine)"]
-        MSSQL["sydafa-mssql-*-source:1433<br/>(DB: sydafa)"]
-        Oracle["sydafa-oracle-*-source:1521<br/>(PDB: sydafa)"]
+        MSSQL["sydafa-src-mssql-*:1433<br/>(DB: sydafa)"]
+        Oracle["sydafa-src-oracle-*:1521<br/>(PDB: sydafa)"]
     end
 
     Human -- "1. POST /activate" --> L1_API
@@ -94,19 +94,25 @@ flowchart TD
 ## 3. Сетевая модель и порты
 
 ### Именование контейнеров и DNS
-Каждый инстанс получает стандартизированное сетевое имя по строгой маске:
-`sydafa-<тип СУБД>-<имя инстанса>-source`
+Каждый инстанс СУБД получает стандартизированное сетевое имя по строгой маске:
+`sydafa-[<префикс>-]src-<тип СУБД>-<имя инстанса>`
 
-Примеры:
-- Инстанс `billing` типа `mssql` -> `sydafa-mssql-billing-source`
-- Инстанс `crm` типа `oracle` -> `sydafa-oracle-crm-source`
-- В тестовом контуре добавляется изолирующий префикс: `sydafa-test-mssql-billing-source`.
+Имя тома данных СУБД формируется аналогично:
+`sydafa-[<префикс>-]data-<тип СУБД>-<имя инстанса>`
+
+Примеры для одиночного запуска (без префикса):
+- Инстанс `billing` типа `mssql` -> контейнер `sydafa-src-mssql-billing`, том `sydafa-data-mssql-billing`
+- Инстанс `crm` типа `oracle` -> контейнер `sydafa-src-oracle-crm`, том `sydafa-data-oracle-crm`
+
+Примеры с префиксом (переменная `SYDAFA_CONTAINER_PREFIX=inst1-`):
+- Инстанс `billing` типа `mssql` -> контейнер `sydafa-inst1-src-mssql-billing`, том `sydafa-inst1-data-mssql-billing`
+- Внутри Docker-сети контейнер дополнительно получает DNS-алиас `sydafa-src-mssql-billing`, что обеспечивает прозрачное подключение клиентов КХД.
 
 ### Внутренние порты в Docker
 Внутри Docker-сети каждый контейнер представляет собой отдельный виртуальный хост:
 - Контейнеры Oracle слушают стандартный внутренний порт **`1521`**.
 - Контейнеры MSSQL слушают стандартный внутренний порт **`1433`**.
-Конфликта портов не возникает: сервисы стенда (Spark, Airflow) обращаются к ним по DNS-именам: `sydafa-oracle-crm-source:1521` и `sydafa-mssql-billing-source:1433`.
+Конфликта портов не возникает: сервисы стенда (Spark, Airflow) обращаются к ним по DNS-именам: `sydafa-src-oracle-crm:1521` и `sydafa-src-mssql-billing:1433`.
 
 ### Внешние порты на хост-машине (`SYDAFA_EXT_PORT_<NAME>`)
 Чтобы открыть доступ к базам из DBeaver на локальной машине, внешние порты хоста задаются индивидуально в переменных окружения сервиса `sydafa` в `docker-compose.yaml`:
@@ -268,7 +274,77 @@ services:
 
 ---
 
-## 7. Справочник REST API
+## 7. Параллельный запуск нескольких экземпляров sydafa
+
+Если требуется поднять 2 или более независимых стендов `sydafa` на одном Docker-хосте (например, для параллельных веток тестирования, разных команд или изолированных сред разработки), необходимо изолировать ресурсы каждого экземпляра.
+
+### Правила изоляции ресурсов:
+1. **Префикс контейнеров и томов (`SYDAFA_CONTAINER_PREFIX`)**: задается уникальным для каждого экземпляра (например, `inst1-` и `inst2-`).
+   - Контейнеры СУБД: `sydafa-inst1-src-...` и `sydafa-inst2-src-...`.
+   - Тома данных СУБД: `sydafa-inst1-data-...` и `sydafa-inst2-data-...`.
+   - Механизм Self-Healing очищает только тома и контейнеры своего префикса и не трогает параллельные экземпляры.
+2. **Том состояния (`/state`)**: у каждого экземпляра должен быть свой собственный volume (например, `sydafa_state_1` и `sydafa_state_2`).
+3. **Порт API sydafa на хосте**: должны быть разными (например, `8091` и `8092`).
+4. **Внешние порты хоста СУБД (`SYDAFA_EXT_PORT_*`)**: если базы публикуются на хост, порты должны быть уникальными (например, `14331` и `14332`).
+5. **Docker-сети**: каждый проект использует свою изолированную сеть.
+
+### Пример: Запуск Экземпляра 1 (`docker-compose.inst1.yaml`)
+```yaml
+name: sydafa-inst1
+
+services:
+  sydafa:
+    image: ghcr.io/georgekochergin/sydafa:latest
+    environment:
+      - SYDAFA_CONTAINER_PREFIX=inst1-
+      - SYDAFA_EXT_PORT_BILLING=14331
+      - SYDAFA_EXT_PORT_CRM=15211
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./conf1/init.json:/app/config/init.json:ro
+      - sydafa_state_1:/state
+    ports:
+      - "8091:8000"
+    networks:
+      - sydafa-net-1
+
+volumes:
+  sydafa_state_1:
+
+networks:
+  sydafa-net-1:
+```
+
+### Пример: Запуск Экземпляра 2 (`docker-compose.inst2.yaml`)
+```yaml
+name: sydafa-inst2
+
+services:
+  sydafa:
+    image: ghcr.io/georgekochergin/sydafa:latest
+    environment:
+      - SYDAFA_CONTAINER_PREFIX=inst2-
+      - SYDAFA_EXT_PORT_BILLING=14332
+      - SYDAFA_EXT_PORT_CRM=15212
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./conf2/init.json:/app/config/init.json:ro
+      - sydafa_state_2:/state
+    ports:
+      - "8092:8000"
+    networks:
+      - sydafa-net-2
+
+volumes:
+  sydafa_state_2:
+
+networks:
+  sydafa-net-2:
+```
+
+---
+
+## 8. Справочник REST API
 
 Интерактивный Swagger UI доступен по адресу: `http://localhost:<порт-sydafa>/docs`.
 
@@ -296,7 +372,7 @@ services:
 
 ---
 
-## 8. Единый метод исполнения: `POST /sources/{source}/exec`
+## 9. Единый метод исполнения: `POST /sources/{source}/exec`
 
 В архитектуре **sydafa** управление структурой базы данных (DDL) и генерацией данных (DML) не разбивается на множество разрозненных REST-эндпоинтов (нет необходимости вызывать отдельные HTTP-ручки для добавления колонки, удаления таблицы или вставки строк). 
 

@@ -13,7 +13,7 @@ class TestSweepIdleSources(unittest.TestCase):
         self.cfg = SourceConfig(
             name="mssql",
             type="mssql",
-            host="sydafa-mssql-mssql-source",
+            host="sydafa-src-mssql-mssql",
             port=1433,
             external_port=14330,
         )

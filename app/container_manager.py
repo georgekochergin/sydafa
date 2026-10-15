@@ -40,13 +40,16 @@ def _source_lock(source: str) -> threading.Lock:
 
 def container_name_for(config: SourceConfig) -> str:
     if CONTAINER_PREFIX:
-        return f"{CONTAINER_PREFIX}{config.host.removeprefix('sydafa-')}"
-    return config.host
+        p = CONTAINER_PREFIX if CONTAINER_PREFIX.endswith("-") else f"{CONTAINER_PREFIX}-"
+        return f"sydafa-{p}src-{config.type}-{config.name}"
+    return f"sydafa-src-{config.type}-{config.name}"
 
 
 def volume_name_for(config: SourceConfig) -> str:
-    prefix = CONTAINER_PREFIX or "sydafa-"
-    return f"{prefix}{config.type}-{config.name}-data"
+    if CONTAINER_PREFIX:
+        p = CONTAINER_PREFIX if CONTAINER_PREFIX.endswith("-") else f"{CONTAINER_PREFIX}-"
+        return f"sydafa-{p}data-{config.type}-{config.name}"
+    return f"sydafa-data-{config.type}-{config.name}"
 
 
 def _get_docker_client() -> docker.DockerClient:
@@ -198,6 +201,7 @@ def _run_container(
         "com.docker.compose.project": project_name,
         "com.docker.compose.service": name,
         "sydafa.managed": "true",
+        "sydafa.prefix": CONTAINER_PREFIX,
         "sydafa.source": source_name,
     }
     environment: dict[str, str] = {}

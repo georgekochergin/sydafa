@@ -66,9 +66,11 @@ WORK_DIR=$(pwd)
 TEST_ID="$$"
 TEST_NET="sydafa-test-net-${TEST_ID}"
 CONF_DIR="/tmp/sydafa-e2e-conf-${TEST_ID}"
-SRC_PREFIX="sydafa-test-${TEST_ID}-"
+SRC_PREFIX="test-${TEST_ID}-"
 TEST_CONTAINER="sydafa-test-${TEST_ID}"
 TEST_STATE_VOL="sydafa-test-state-${TEST_ID}"
+TARGET_CONTAINER_PREFIX="sydafa-${SRC_PREFIX}"
+TARGET_VOLUME_PREFIX="sydafa-${SRC_PREFIX}"
 
 # Свободный порт на хосте, гарантирующий отсутствие коллизий (с 8000, 8090 и параллельными запусками)
 TEST_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
@@ -77,7 +79,7 @@ cleanup() {
   echo "Очистка тестового окружения (TEST_ID=${TEST_ID})..."
   # 1. Принудительно удаляем контейнеры СУБД с префиксом этого тестового прогона
   local c_ids
-  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  c_ids=$(docker ps -aq --filter "name=^${TARGET_CONTAINER_PREFIX}" 2>/dev/null || true)
   if [ -n "$c_ids" ]; then
     echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
   fi
@@ -86,7 +88,7 @@ cleanup() {
 
   # 2. Удаляем тома данных СУБД и том состояния теста
   local v_ids
-  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  v_ids=$(docker volume ls -q --filter "name=^${TARGET_VOLUME_PREFIX}" 2>/dev/null || true)
   if [ -n "$v_ids" ]; then
     echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
   fi
@@ -159,12 +161,12 @@ EOF
   echo "Остановка MSSQL и очистка перед следующей фазой..."
   docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
   local c_ids
-  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  c_ids=$(docker ps -aq --filter "name=^${TARGET_CONTAINER_PREFIX}" 2>/dev/null || true)
   if [ -n "$c_ids" ]; then
     echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
   fi
   local v_ids
-  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  v_ids=$(docker volume ls -q --filter "name=^${TARGET_VOLUME_PREFIX}" 2>/dev/null || true)
   if [ -n "$v_ids" ]; then
     echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
   fi
@@ -217,12 +219,12 @@ EOF
   echo "Остановка Oracle и очистка..."
   docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
   local c_ids
-  c_ids=$(docker ps -aq --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  c_ids=$(docker ps -aq --filter "name=^${TARGET_CONTAINER_PREFIX}" 2>/dev/null || true)
   if [ -n "$c_ids" ]; then
     echo "$c_ids" | xargs docker rm -f >/dev/null 2>&1 || true
   fi
   local v_ids
-  v_ids=$(docker volume ls -q --filter "name=^${SRC_PREFIX}" 2>/dev/null || true)
+  v_ids=$(docker volume ls -q --filter "name=^${TARGET_VOLUME_PREFIX}" 2>/dev/null || true)
   if [ -n "$v_ids" ]; then
     echo "$v_ids" | xargs docker volume rm -f >/dev/null 2>&1 || true
   fi
