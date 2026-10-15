@@ -168,10 +168,12 @@ def check_and_heal_orphaned_state() -> None:
         logger.warning("Не удалось подключиться к Docker для проверки self-healing: %s", e)
         return
 
-    prefix = os.environ.get("SYDAFA_CONTAINER_PREFIX", "")
-    p = (prefix if prefix.endswith("-") else f"{prefix}-") if prefix else ""
-    target_c_prefix = f"sydafa-{p}src-"
-    target_v_prefix = f"sydafa-{p}data-"
+    from .container_manager import _get_docker_client, sanitize_user_token
+
+    prefix_raw = os.environ.get("SYDAFA_CONTAINER_PREFIX", "")
+    prefix = sanitize_user_token(prefix_raw)
+    target_c_prefix = f"sydafa-{prefix}-src-" if prefix else "sydafa-src-"
+    target_v_prefix = f"sydafa-{prefix}-data-" if prefix else "sydafa-data-"
 
     healed_containers = 0
     try:
