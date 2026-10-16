@@ -109,6 +109,7 @@ def validate_table_invariants_on_data(
     source: str,
     table_fqn: str,
     profile: TableRuleProfile,
+    conn: Any = None,
 ) -> None:
     """Проверяет соответствие существующих данных в СУБД правилам инвариантов profile.
 
@@ -130,8 +131,8 @@ def validate_table_invariants_on_data(
     dialect = cfg.type
     qualified = qualify_table(schema_name, table_name, dialect)
 
-    with get_connection(source) as conn:
-        cur = conn.cursor()
+    def _check_on_connection(active_conn):
+        cur = active_conn.cursor()
         for inv in profile.invariants:
             if isinstance(inv, CumulativeBalanceInvariant):
                 part_cols = ", ".join(quote_ident(c, dialect) for c in inv.partition_by)
@@ -158,3 +159,9 @@ def validate_table_invariants_on_data(
                         f"для партиции {list(part_vals)} текущий накопленный баланс равен {sum_val}, "
                         f"что нарушает ограничение min_balance={inv.min_balance}{max_limit_str}"
                     )
+
+    if conn is not None:
+        _check_on_connection(conn)
+    else:
+        with get_connection(source) as fresh_conn:
+            _check_on_connection(fresh_conn)

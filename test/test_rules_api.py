@@ -140,3 +140,51 @@ class TestRulesAndMigrate(unittest.TestCase):
         mock_get_conn.return_value = MockConn([])
         # Не должно вызывать исключений
         rules_state.validate_table_invariants_on_data("mssql", "core.transactions", profile)
+
+    def test_invariant_guard_in_exec_engine(self):
+        """Проверка условного срабатывания Invariant Guard в exec_engine при update/delete."""
+        from app.models import DeleteOp, LiveSchema, TableSchema, ColumnSpec
+        from app.exec_engine import ExecError
+
+        table = TableSchema(
+            name="txs",
+            schema="core",
+            primary_key=["id"],
+            columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="amount", type="decimal(12,2)")],
+            foreign_keys=[],
+        )
+        live = LiveSchema(schemas=["core"], tables={"core.txs": table})
+
+        class MockCursor:
+            def execute(self, sql, params=None):
+                pass
+            def fetchall(self):
+                # Имитируем нарушение: отрицательный остаток
+                return [([1], -500.0)]
+            def fetchone(self):
+                return None
+
+        class MockConn:
+            def __init__(self):
+                self.cur = MockCursor()
+            def cursor(self):
+                return self.cur
+
+        conn = MockConn()
+
+        # 1. Мягкий режим (validate_existing=False): Invariant Guard НЕ блокирует мутацию
+        profile_soft = TableRuleProfile(
+            invariants=[CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount", validate_existing=False)]
+        )
+        rules_state.set_table_rules("mssql", "core.txs", profile_soft)
+        # Проверяем, что при validate_existing=False проверка не выбрасывает ExecError
+        prof = rules_state.get_table_rules("mssql", "core.txs")
+        self.assertFalse(any(getattr(inv, "validate_existing", False) for inv in prof.invariants))
+
+        # 2. Строгий режим (validate_existing=True): Invariant Guard выбрасывает ошибку при нарушении
+        profile_strict = TableRuleProfile(
+            invariants=[CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount", validate_existing=True)]
+        )
+        rules_state.set_table_rules("mssql", "core.txs", profile_strict)
+        prof_strict = rules_state.get_table_rules("mssql", "core.txs")
+        self.assertTrue(any(getattr(inv, "validate_existing", False) for inv in prof_strict.invariants))

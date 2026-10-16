@@ -143,6 +143,10 @@ class CumulativeBalanceInvariant(BaseModel):
     credit_value: str = Field(default="CREDIT", description="Значение типа операции для пополнения")
     debit_value: str = Field(default="DEBIT", description="Значение типа операции для списания")
     signed_amount: bool = Field(default=True, description="True: списание отрицательное (-X); False: модуль (|X|)")
+    validate_existing: bool = Field(
+        default=False,
+        description="False: мягкий режим (мутации свободны, append балансирует); True: строгий режим с валидацией мутаций.",
+    )
 
     @field_validator("partition_by")
     @classmethod

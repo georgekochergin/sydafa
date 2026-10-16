@@ -242,6 +242,13 @@ def set_table_rule_profile(
     _assert_source(source)
     try:
         if validate_existing:
+            for inv in profile.invariants:
+                if hasattr(inv, "validate_existing"):
+                    inv.validate_existing = True
+            request_host = request.url.hostname if request else None
+            _wake(source, request_host=request_host)
+            rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
+        elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
             rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
