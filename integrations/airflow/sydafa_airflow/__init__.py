@@ -25,10 +25,4 @@ def get_provider_info() -> dict[str, Any]:
         "name": "Sydafa Airflow Integration",
         "description": "Apache Airflow operators and hook for sydafa DBMS emulation service.",
         "versions": ["0.1.0"],
-        "connection-types": [
-            {
-                "connection-type": "http",
-                "hook-class-name": "sydafa_airflow.hooks.sydafa.SydafaHook",
-            }
-        ],
     }

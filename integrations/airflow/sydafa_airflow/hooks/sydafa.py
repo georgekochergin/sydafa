@@ -18,10 +18,6 @@ class SydafaHook(BaseHook):
     Аргумент conn_id является строго обязательным.
     """
 
-    conn_name_attr = "conn_id"
-    conn_type = "http"
-    hook_name = "Sydafa"
-
     def __init__(self, conn_id: str) -> None:
         super().__init__()
         if not conn_id:
