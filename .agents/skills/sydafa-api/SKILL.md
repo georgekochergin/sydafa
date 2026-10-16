@@ -12,7 +12,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 > **Единая точка правды (Single Source of Truth):**
 > Каноническая проектная документация, полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
 > параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`),
-> поведения таблиц аудита (`_upd_`, `_del_`) и правил валидации зафиксированы в основном файле проекта: [README.md](../../../README.md) (Раздел 9 «Единый метод исполнения: `POST /sources/{source}/exec`»).
+> поведения таблиц аудита (`_upd_`, `_del_`) и правил валидации зафиксированы в основном файле проекта: [README.md](../../../README.md) (Раздел 7 «Транзакционная эволюция схем и управление данными (`POST /sources/{source}/migrate`)»).
 > Настоящий скилл ссылается на `README.md` и служит исключительно для быстрой сборки JSON-спецификаций из текста.
 
 ## Формат ответа (обязательный)
@@ -26,7 +26,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 2. **Целевая ручка API** согласно актуальному коду:
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
-   - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод, алиас: `POST /sources/{source}/exec`);
+   - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод);
    - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{table_fqn}` (установка правил для таблицы `schema.table`);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;

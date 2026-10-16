@@ -189,7 +189,6 @@ def reinit_source_endpoint(source: str):
 # ==================== DATA & SCHEMA MIGRATION API (Транзакционный DDL + DML) ====================
 
 @app.post("/sources/{source}/migrate", response_model=MigrateResult)
-@app.post("/sources/{source}/exec", response_model=MigrateResult, include_in_schema=False)
 def migrate_source(source: str, req: MigrateRequest, request: Request):
     """Выполняет упорядоченный батч операций DDL и DML в единой All-or-Nothing транзакции."""
     _assert_source(source)

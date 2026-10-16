@@ -132,7 +132,7 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: connection has jdbc_url", "jdbc_url" in conn, True)
     check(f"{source}: parameters omitted from connection", "parameters" not in conn, True)
 
-    # 3. DDL: Создание схемы и связанных таблиц с FK через POST /exec
+    # 3. DDL: Создание схемы и связанных таблиц с FK через POST /migrate
     schema_name = "e2e_demo"
     init_ops = [
         {"op": "create_schema", "name": schema_name},
@@ -166,7 +166,7 @@ def run_source_e2e(base_url: str, source: str):
             ],
         },
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": init_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": init_ops})
     check(f"{source}: exec create schema & tables", code, 200)
     check(f"{source}: executed 3 DDL ops", res.get("executed") if isinstance(res, dict) else None, 3)
 
@@ -183,7 +183,7 @@ def run_source_e2e(base_url: str, source: str):
         {"op": "append", "table_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
         {"op": "append", "table_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": append_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
 
     # 5. DML: Update по предикату
@@ -195,7 +195,7 @@ def run_source_e2e(base_url: str, source: str):
             "set": {"cat_name": "PremiumCategory"},
         }
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": update_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": update_ops})
     check(f"{source}: exec update rows", code, 200)
 
     # 5.1. Снимок в _upd_: _exec_batch_id == main._batch_id и сохранение старого _batch_id
@@ -220,7 +220,7 @@ def run_source_e2e(base_url: str, source: str):
             "cascade": False,
         }
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": delete_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": delete_ops})
     check(f"{source}: exec delete item", code, 200)
 
     # 6.1. Удаленная строка сохранена в _del_
@@ -244,7 +244,7 @@ def run_source_e2e(base_url: str, source: str):
             "limit": 2,
         }
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_update_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": random_update_ops})
     check(f"{source}: exec random_rows update", code, 200)
 
     # 6.3. DML: Delete N random rows (с опцией limit без предиката)
@@ -255,7 +255,7 @@ def run_source_e2e(base_url: str, source: str):
             "limit": 2,
         }
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_delete_ops})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": random_delete_ops})
     check(f"{source}: exec random_rows delete", code, 200)
 
     # 7. Corner-cases:
@@ -263,7 +263,7 @@ def run_source_e2e(base_url: str, source: str):
     bad_trunc = [
         {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": False}
     ]
-    code, _ = http("POST", f"{base_url}/sources/{source}/exec", {"operations": bad_trunc})
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_trunc})
     check(f"{source}: truncate parent without cascade -> 409", code, 409)
 
     # 7b. Неизвестная колонка в update -> 422
@@ -275,7 +275,7 @@ def run_source_e2e(base_url: str, source: str):
             "set": {"cat_name": "test"},
         }
     ]
-    code, _ = http("POST", f"{base_url}/sources/{source}/exec", {"operations": bad_col_update})
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_col_update})
     check(f"{source}: unknown column update -> 422", code, 422)
 
     # 7c. Недопустимый оператор в predicate -> 422
@@ -287,7 +287,7 @@ def run_source_e2e(base_url: str, source: str):
             "set": {"cat_name": "test"},
         }
     ]
-    code, _ = http("POST", f"{base_url}/sources/{source}/exec", {"operations": bad_op_update})
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_op_update})
     check(f"{source}: invalid operator update -> 422", code, 422)
 
     # 8. Комплексная DDL эволюция: add_column + rename_column
@@ -304,7 +304,7 @@ def run_source_e2e(base_url: str, source: str):
             "to_name": "score",
         },
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": complex_evolve})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": complex_evolve})
     check(f"{source}: complex evolve (add+rename) -> 200", code, 200)
 
     # 8.1. Пересоздание пустых _upd_ и _del_ после add_column
@@ -332,7 +332,7 @@ def run_source_e2e(base_url: str, source: str):
             "column": {"name": "invalid name with spaces", "type": "string"},
         },
     ]
-    code, _ = http("POST", f"{base_url}/sources/{source}/exec", {"operations": failing_batch})
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": failing_batch})
     check(f"{source}: failing batch rejected -> 422", code, 422)
 
     # Проверка отката: temp_probe отсутствует
@@ -346,7 +346,7 @@ def run_source_e2e(base_url: str, source: str):
     clean_trunc = [
         {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": True}
     ]
-    code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": clean_trunc})
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": clean_trunc})
     check(f"{source}: truncate with cascade -> 200", code, 200)
 
     print(f"=== Завершено тестирование источника '{source}' ===\n")
