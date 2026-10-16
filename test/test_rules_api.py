@@ -62,8 +62,7 @@ class TestRulesAndMigrate(unittest.TestCase):
                     "foreign_keys": [
                         {
                             "columns": ["account_id"],
-                            "ref_schema": "core",
-                            "ref_table": "accounts",
+                            "ref_entity_fqn": "core.accounts",
                             "ref_columns": ["account_id"],
                         }
                     ],
@@ -88,7 +87,7 @@ class TestRulesAndMigrate(unittest.TestCase):
         req = MigrateRequest(
             operations=[
                 {"op": "create_schema", "name": "test"},
-                {"op": "truncate", "table_fqn": "test.users"},
+                {"op": "truncate", "entity_fqn": "test.users"},
             ]
         )
         self.assertEqual(len(req.operations), 2)

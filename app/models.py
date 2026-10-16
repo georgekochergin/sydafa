@@ -105,7 +105,7 @@ BATCH_ID_COLUMN = "_batch_id"
 EXEC_BATCH_ID_COLUMN = "_exec_batch_id"
 
 _IDENT_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_TABLE_FQN_REGEX = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
+_ENTITY_FQN_REGEX = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
 
 
 def validate_identifier(v: str) -> str:
@@ -114,12 +114,12 @@ def validate_identifier(v: str) -> str:
     return v
 
 
-def validate_table_fqn(table_fqn: str) -> tuple[str, str]:
+def validate_entity_fqn(entity_fqn: str) -> tuple[str, str]:
     """Проверяет формат schema.table и возвращает (schema, table)."""
-    match = _TABLE_FQN_REGEX.match(table_fqn.strip())
+    match = _ENTITY_FQN_REGEX.match(entity_fqn.strip())
     if not match:
         raise ValueError(
-            f"Некорректный идентификатор таблицы '{table_fqn}'. Ожидается формат 'schema.table', "
+            f"Некорректный идентификатор сущности '{entity_fqn}'. Ожидается формат 'schema.table', "
             "где имена схемы и таблицы содержат только латиницу, цифры и символ '_'"
         )
     return match.group(1), match.group(2)
@@ -193,9 +193,22 @@ class ForeignKey(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     columns: list[str]
-    ref_schema: str | None = None
-    ref_table: str
+    ref_entity_fqn: str = Field(description="FQN целевой сущности в формате 'schema.table'")
     ref_columns: list[str]
+
+    @field_validator("ref_entity_fqn")
+    @classmethod
+    def check_ref_entity_fqn(cls, v: str) -> str:
+        validate_entity_fqn(v)
+        return v.strip()
+
+    @property
+    def ref_schema(self) -> str:
+        return self.ref_entity_fqn.split(".")[0].strip()
+
+    @property
+    def ref_table(self) -> str:
+        return self.ref_entity_fqn.split(".")[1].strip()
 
 
 class TableSchema(BaseModel):
@@ -262,27 +275,27 @@ class RenameSchemaOp(BaseModel):
         return validate_identifier(v)
 
 
-class TableFqnOpMixin(BaseModel):
+class EntityFqnOpMixin(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    table_fqn: str = Field(description="FQN таблицы в формате 'schema.table'")
+    entity_fqn: str = Field(description="FQN сущности в формате 'schema.table'")
 
-    @field_validator("table_fqn")
+    @field_validator("entity_fqn")
     @classmethod
-    def check_table_fqn(cls, v: str) -> str:
-        validate_table_fqn(v)
+    def check_entity_fqn(cls, v: str) -> str:
+        validate_entity_fqn(v)
         return v.strip()
 
     @property
     def schema_(self) -> str:
-        return self.table_fqn.split(".")[0].strip()
+        return self.entity_fqn.split(".")[0].strip()
 
     @property
     def table(self) -> str:
-        return self.table_fqn.split(".")[1].strip()
+        return self.entity_fqn.split(".")[1].strip()
 
 
-class CreateTableOp(TableFqnOpMixin):
+class CreateTableOp(EntityFqnOpMixin):
     op: Literal["create_table"] = "create_table"
     primary_key: list[str]
     columns: list[ColumnSpec]
@@ -293,7 +306,7 @@ class CreateTableOp(TableFqnOpMixin):
         return self.table
 
 
-class DropTableOp(TableFqnOpMixin):
+class DropTableOp(EntityFqnOpMixin):
     op: Literal["drop_table"] = "drop_table"
 
     @property
@@ -301,7 +314,7 @@ class DropTableOp(TableFqnOpMixin):
         return self.table
 
 
-class RenameTableOp(TableFqnOpMixin):
+class RenameTableOp(EntityFqnOpMixin):
     op: Literal["rename_table"] = "rename_table"
     to_name: str
 
@@ -315,7 +328,7 @@ class RenameTableOp(TableFqnOpMixin):
         return validate_identifier(v)
 
 
-class TransferTableOp(TableFqnOpMixin):
+class TransferTableOp(EntityFqnOpMixin):
     op: Literal["transfer_table"] = "transfer_table"
     to_schema: str
 
@@ -329,12 +342,12 @@ class TransferTableOp(TableFqnOpMixin):
         return validate_identifier(v)
 
 
-class AddColumnOp(TableFqnOpMixin):
+class AddColumnOp(EntityFqnOpMixin):
     op: Literal["add_column"] = "add_column"
     column: ColumnSpec
 
 
-class DropColumnOp(TableFqnOpMixin):
+class DropColumnOp(EntityFqnOpMixin):
     op: Literal["drop_column"] = "drop_column"
     name: str
 
@@ -344,7 +357,7 @@ class DropColumnOp(TableFqnOpMixin):
         return validate_identifier(v)
 
 
-class RenameColumnOp(TableFqnOpMixin):
+class RenameColumnOp(EntityFqnOpMixin):
     op: Literal["rename_column"] = "rename_column"
     from_name: str
     to_name: str
@@ -390,25 +403,25 @@ class Condition(BaseModel):
     value: Any
 
 
-class TruncateOp(TableFqnOpMixin):
+class TruncateOp(EntityFqnOpMixin):
     op: Literal["truncate"] = "truncate"
     cascade: bool = False
 
 
-class AppendOp(TableFqnOpMixin):
+class AppendOp(EntityFqnOpMixin):
     op: Literal["append"] = "append"
     rows: int = Field(default=1, gt=0, le=100_000)
     new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
-class UpdateOp(TableFqnOpMixin):
+class UpdateOp(EntityFqnOpMixin):
     op: Literal["update"] = "update"
     predicate: list[Condition] = Field(default_factory=list)
     set: dict[str, Any]
     limit: int | None = Field(default=None, gt=0, description="Обновить не более N случайных строк, удовлетворяющих предикату")
 
 
-class DeleteOp(TableFqnOpMixin):
+class DeleteOp(EntityFqnOpMixin):
     op: Literal["delete"] = "delete"
     predicate: list[Condition] = Field(default_factory=list)
     cascade: bool = False

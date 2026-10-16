@@ -1,6 +1,6 @@
 ---
 name: sydafa-api
-description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows, configure generation rules) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/migrate or /sources/{source}/rules/{table_fqn}.
+description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows, configure generation rules) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/migrate or /sources/{source}/rules/{entity_fqn}.
 ---
 
 # sydafa API: генерация JSON-тел запросов
@@ -27,7 +27,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 2. **Целевая ручка API** согласно актуальному коду:
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
    - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод);
-   - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{table_fqn}` (установка правил для таблицы `schema.table`);
+   - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{entity_fqn}` (установка правил для сущности `schema.table`);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
@@ -43,7 +43,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 `{source}` — имя источника (`mssql`, `oracle` или имя инстанса, например `billing`, `crm`).
 
-## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{table_fqn}`
+## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{entity_fqn}`
 
 Принимает профиль правил генерации `TableRuleProfile` (управляет как генераторами колонок `columns`, так и инвариантами таблицы `invariants`).
 Опциональный параметр: `?validate_existing=false` (или поле в инварианте).
@@ -82,22 +82,22 @@ description: Use when the user asks to generate JSON request bodies for the syda
 | `create_schema` | `name` | Создание новой схемы в базе |
 | `drop_schema` | `name` | Удаление пустой схемы (ошибка, если в ней есть таблицы) |
 | `rename_schema` | `from_name`, `to_name` | Переименование схемы с переносом таблиц |
-| `create_table` | `table_fqn`, `primary_key`, `columns`, `foreign_keys` | Создание таблицы с типами данных |
-| `drop_table` | `table_fqn` | Удаление таблицы (каскадный drop constraints) |
-| `rename_table` | `table_fqn`, `to_name` | Переименование таблицы внутри схемы |
-| `transfer_table` | `table_fqn`, `to_schema` | Перенос таблицы в другую схему |
-| `add_column` | `table_fqn`, `column` (объект `ColumnSpec`) | Добавление новой колонки |
-| `drop_column` | `table_fqn`, `name` | Удаление колонки (запрещено удалять колонки из PK) |
-| `rename_column` | `table_fqn`, `from_name`, `to_name` | Переименование колонки (PK обновляется автоматически) |
+| `create_table` | `entity_fqn`, `primary_key`, `columns`, `foreign_keys` (с `ref_entity_fqn`) | Создание таблицы с типами данных |
+| `drop_table` | `entity_fqn` | Удаление таблицы (каскадный drop constraints) |
+| `rename_table` | `entity_fqn`, `to_name` | Переименование таблицы внутри схемы |
+| `transfer_table` | `entity_fqn`, `to_schema` | Перенос таблицы в другую схему |
+| `add_column` | `entity_fqn`, `column` (объект `ColumnSpec`) | Добавление новой колонки |
+| `drop_column` | `entity_fqn`, `name` | Удаление колонки (запрещено удалять колонки из PK) |
+| `rename_column` | `entity_fqn`, `from_name`, `to_name` | Переименование колонки (PK обновляется автоматически) |
 
 ### 2. DML — Данные и генерация (4 операции)
 
 | Операция (`op`) | Обязательные поля | Опциональные поля | Назначение |
 |---|---|---|---|
-| `truncate` | `table_fqn` | `cascade` (bool) | Очистка таблицы |
-| `append` | `table_fqn`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
-| `update` | `table_fqn`, `set` | `predicate` (list), `limit` (int) | Обновление строк по предикату и/или не более N случайных строк |
-| `delete` | `table_fqn` | `predicate` (list), `cascade` (bool), `limit` (int) | Удаление строк по предикату и/или не более N случайных строк |
+| `truncate` | `entity_fqn` | `cascade` (bool) | Очистка таблицы |
+| `append` | `entity_fqn`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
+| `update` | `entity_fqn`, `set` | `predicate` (list), `limit` (int) | Обновление строк по предикату и/или не более N случайных строк |
+| `delete` | `entity_fqn` | `predicate` (list), `cascade` (bool), `limit` (int) | Удаление строк по предикату и/или не более N случайных строк |
 
 ## Системные колонки и таблицы аудита (_batch_id, _exec_batch_id, _upd_, _del_)
 
@@ -148,7 +148,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
     {"op": "create_schema", "name": "core"},
     {
       "op": "create_table",
-      "table_fqn": "core.accounts",
+      "entity_fqn": "core.accounts",
       "primary_key": ["id"],
       "columns": [
         {"name": "id", "type": "bigint"},
@@ -156,8 +156,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
       ],
       "foreign_keys": []
     },
-    {"op": "append", "table_fqn": "core.accounts", "rows": 50, "new_key_ratio": 0.0},
-    {"op": "rename_column", "table_fqn": "core.accounts", "from_name": "balance", "to_name": "amount"}
+    {"op": "append", "entity_fqn": "core.accounts", "rows": 50, "new_key_ratio": 0.0},
+    {"op": "rename_column", "entity_fqn": "core.accounts", "from_name": "balance", "to_name": "amount"}
   ]
 }
 ```

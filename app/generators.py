@@ -317,8 +317,8 @@ def _mint_new_row(
 
     if session is None:
         from . import rules_state
-        table_fqn = f"{table.schema_}.{table.name}"
-        profile = rules_state.get_table_rules(source, table_fqn) or TableRuleProfile()
+        entity_fqn = f"{table.schema_}.{table.name}"
+        profile = rules_state.get_table_rules(source, entity_fqn) or TableRuleProfile()
         session = GenerationSession(conn, dialect, live, table, profile)
 
     for fk in table.foreign_keys:
@@ -424,8 +424,8 @@ def append_rows_conn(
 ) -> int:
     table = _find_table(live, schema, table_name)
     from . import rules_state
-    table_fqn = f"{schema}.{table_name}"
-    profile = rules_state.get_table_rules(source, table_fqn) or TableRuleProfile()
+    entity_fqn = f"{schema}.{table_name}"
+    profile = rules_state.get_table_rules(source, entity_fqn) or TableRuleProfile()
     session = GenerationSession(conn, dialect, live, table, profile)
     for _ in range(rows):
         _mint_new_row(conn, source, dialect, live, table, new_key_ratio, batch_id, session=session)
@@ -661,9 +661,10 @@ def delete_rows_conn(
     table = _find_table(live, schema, table_name)
     qualified = qualify_table(table.schema_, table.name, dialect)
 
+    current_fqn = f"{table.schema_}.{table.name}"
     dependents = [
         (t, fk) for t in live.tables.values() for fk in t.foreign_keys
-        if fk.ref_table == table.name and (fk.ref_schema or t.schema_) == table.schema_
+        if fk.ref_entity_fqn == current_fqn
     ]
     cur = conn.cursor()
     del_name = f"_del_{table.name}"
@@ -820,9 +821,10 @@ def truncate_table_conn(
 ) -> int:
     table = _find_table(live, schema, table_name)
     qualified = qualify_table(table.schema_, table.name, dialect)
+    current_fqn = f"{table.schema_}.{table.name}"
     dependents = [
         t for t in live.tables.values()
-        if t != table and any(fk.ref_table == table.name and (fk.ref_schema or t.schema_) == table.schema_ for fk in t.foreign_keys)
+        if t != table and any(fk.ref_entity_fqn == current_fqn for fk in t.foreign_keys)
     ]
     cur = conn.cursor()
 

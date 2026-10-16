@@ -138,7 +138,7 @@ def run_source_e2e(base_url: str, source: str):
         {"op": "create_schema", "name": schema_name},
         {
             "op": "create_table",
-            "table_fqn": f"{schema_name}.categories",
+            "entity_fqn": f"{schema_name}.categories",
             "primary_key": ["cat_id"],
             "columns": [
                 {"name": "cat_id", "type": "bigint", "generator": {"kind": "sequence"}},
@@ -148,7 +148,7 @@ def run_source_e2e(base_url: str, source: str):
         },
         {
             "op": "create_table",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "primary_key": ["item_id"],
             "columns": [
                 {"name": "item_id", "type": "bigint", "generator": {"kind": "sequence"}},
@@ -159,8 +159,7 @@ def run_source_e2e(base_url: str, source: str):
             "foreign_keys": [
                 {
                     "columns": ["cat_id"],
-                    "ref_schema": schema_name,
-                    "ref_table": "categories",
+                    "ref_entity_fqn": f"{schema_name}.categories",
                     "ref_columns": ["cat_id"],
                 }
             ],
@@ -180,8 +179,8 @@ def run_source_e2e(base_url: str, source: str):
 
     # 4. DML: Наполнение данными (append) с FK связями
     append_ops = [
-        {"op": "append", "table_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
-        {"op": "append", "table_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
+        {"op": "append", "entity_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
@@ -190,7 +189,7 @@ def run_source_e2e(base_url: str, source: str):
     update_ops = [
         {
             "op": "update",
-            "table_fqn": f"{schema_name}.categories",
+            "entity_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "cat_id", "operator": "=", "value": 1}],
             "set": {"cat_name": "PremiumCategory"},
         }
@@ -215,7 +214,7 @@ def run_source_e2e(base_url: str, source: str):
     delete_ops = [
         {
             "op": "delete",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "predicate": [{"column": "item_id", "operator": "=", "value": 1}],
             "cascade": False,
         }
@@ -239,7 +238,7 @@ def run_source_e2e(base_url: str, source: str):
     random_update_ops = [
         {
             "op": "update",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "set": {"title": "RandomlyUpdated"},
             "limit": 2,
         }
@@ -251,7 +250,7 @@ def run_source_e2e(base_url: str, source: str):
     random_delete_ops = [
         {
             "op": "delete",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "limit": 2,
         }
     ]
@@ -261,7 +260,7 @@ def run_source_e2e(base_url: str, source: str):
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409
     bad_trunc = [
-        {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": False}
+        {"op": "truncate", "entity_fqn": f"{schema_name}.categories", "cascade": False}
     ]
     code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_trunc})
     check(f"{source}: truncate parent without cascade -> 409", code, 409)
@@ -270,7 +269,7 @@ def run_source_e2e(base_url: str, source: str):
     bad_col_update = [
         {
             "op": "update",
-            "table_fqn": f"{schema_name}.categories",
+            "entity_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "unknown_col", "operator": "=", "value": 1}],
             "set": {"cat_name": "test"},
         }
@@ -282,7 +281,7 @@ def run_source_e2e(base_url: str, source: str):
     bad_op_update = [
         {
             "op": "update",
-            "table_fqn": f"{schema_name}.categories",
+            "entity_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "cat_id", "operator": "ILIKE", "value": "1"}],
             "set": {"cat_name": "test"},
         }
@@ -294,12 +293,12 @@ def run_source_e2e(base_url: str, source: str):
     complex_evolve = [
         {
             "op": "add_column",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "column": {"name": "rating", "type": "decimal(3,1)"},
         },
         {
             "op": "rename_column",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "from_name": "rating",
             "to_name": "score",
         },
@@ -323,12 +322,12 @@ def run_source_e2e(base_url: str, source: str):
     failing_batch = [
         {
             "op": "add_column",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "column": {"name": "temp_probe", "type": "string"},
         },
         {
             "op": "add_column",
-            "table_fqn": f"{schema_name}.items",
+            "entity_fqn": f"{schema_name}.items",
             "column": {"name": "invalid name with spaces", "type": "string"},
         },
     ]
@@ -344,7 +343,7 @@ def run_source_e2e(base_url: str, source: str):
 
     # 10. Truncate каскадно (успешная очистка)
     clean_trunc = [
-        {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": True}
+        {"op": "truncate", "entity_fqn": f"{schema_name}.categories", "cascade": True}
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": clean_trunc})
     check(f"{source}: truncate with cascade -> 200", code, 200)

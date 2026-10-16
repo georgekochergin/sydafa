@@ -69,7 +69,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "truncate",
-                        "table_fqn": op.table_fqn,
+                        "entity_fqn": op.entity_fqn,
                     })
 
                 elif isinstance(op, AppendOp):
@@ -79,7 +79,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "append",
-                        "table_fqn": op.table_fqn,
+                        "entity_fqn": op.entity_fqn,
                         "inserted": inserted,
                     })
 
@@ -89,18 +89,18 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
                     from . import rules_state
-                    table_fqn = op.table_fqn
-                    profile = rules_state.get_table_rules(source_name, table_fqn)
+                    entity_fqn = op.entity_fqn
+                    profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            rules_state.validate_table_invariants_on_data(source_name, table_fqn, profile, conn=conn)
+                            rules_state.validate_table_invariants_on_data(source_name, entity_fqn, profile, conn=conn)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
                     applied_records.append({
                         "step": step_idx,
                         "op": "update",
-                        "table_fqn": op.table_fqn,
+                        "entity_fqn": op.entity_fqn,
                         "updated": updated,
                     })
 
@@ -110,18 +110,18 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
                     from . import rules_state
-                    table_fqn = op.table_fqn
-                    profile = rules_state.get_table_rules(source_name, table_fqn)
+                    entity_fqn = op.entity_fqn
+                    profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            rules_state.validate_table_invariants_on_data(source_name, table_fqn, profile, conn=conn)
+                            rules_state.validate_table_invariants_on_data(source_name, entity_fqn, profile, conn=conn)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
                     applied_records.append({
                         "step": step_idx,
                         "op": "delete",
-                        "table_fqn": op.table_fqn,
+                        "entity_fqn": op.entity_fqn,
                         "deleted": deleted,
                     })
 
@@ -136,8 +136,8 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                         "op": op_name,
                         "description": desc,
                     }
-                    if hasattr(op, "table_fqn"):
-                        record["table_fqn"] = op.table_fqn
+                    if hasattr(op, "entity_fqn"):
+                        record["entity_fqn"] = op.entity_fqn
                     applied_records.append(record)
 
             # Фиксация транзакции в БД
