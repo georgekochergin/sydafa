@@ -6,6 +6,7 @@ import unittest
 from pydantic import ValidationError
 
 from app.generators import (
+    GenerationSession,
     GeneratorError,
     _generate_value,
     _mint_new_row,
@@ -15,12 +16,14 @@ from app.generators import (
 from app.models import (
     ChoiceGenerator,
     ColumnSpec,
+    CumulativeBalanceInvariant,
     DateOffsetGenerator,
     FakerGenerator,
     LiveSchema,
     RandomDateGenerator,
     RandomDecimalGenerator,
     SequenceGenerator,
+    TableRuleProfile,
     TableSchema,
 )
 
@@ -52,10 +55,9 @@ class FakeConn:
 class TestGenerators(unittest.TestCase):
     def test_random_date_default_is_current_year(self):
         """random_date без параметров всегда возвращает дату строго в рамках текущего года."""
-        col = ColumnSpec(name="dt", type="date", generator=RandomDateGenerator())
         current_year = date.today().year
         for _ in range(50):
-            val = _generate_value(col)
+            val = _generate_value("dt", gen=RandomDateGenerator(), col_type="date")
             self.assertIsInstance(val, date)
             self.assertEqual(val.year, current_year)
             self.assertGreaterEqual(val, date(current_year, 1, 1))
@@ -66,31 +68,19 @@ class TestGenerators(unittest.TestCase):
         today = date.today()
 
         # Anchor today + dim d [-5, 5]
-        col_d = ColumnSpec(
-            name="dt_d",
-            type="date",
-            generator=RandomDateGenerator(anchor="today", dim="d", min_offset=-5, max_offset=5),
-        )
-        val_d = _generate_value(col_d)
+        gen_d = RandomDateGenerator(anchor="today", dim="d", min_offset=-5, max_offset=5)
+        val_d = _generate_value("dt_d", gen=gen_d, col_type="date")
         self.assertIsInstance(val_d, date)
         self.assertLessEqual(abs((val_d - today).days), 5)
 
         # Anchor start_of_month
-        col_m = ColumnSpec(
-            name="dt_m",
-            type="date",
-            generator=RandomDateGenerator(anchor="start_of_month", dim="d", min_offset=0, max_offset=0),
-        )
-        val_m = _generate_value(col_m)
+        gen_m = RandomDateGenerator(anchor="start_of_month", dim="d", min_offset=0, max_offset=0)
+        val_m = _generate_value("dt_m", gen=gen_m, col_type="date")
         self.assertEqual(val_m, date(today.year, today.month, 1))
 
         # Anchor start_of_quarter
-        col_q = ColumnSpec(
-            name="dt_q",
-            type="date",
-            generator=RandomDateGenerator(anchor="start_of_quarter", dim="d", min_offset=0, max_offset=0),
-        )
-        val_q = _generate_value(col_q)
+        gen_q = RandomDateGenerator(anchor="start_of_quarter", dim="d", min_offset=0, max_offset=0)
+        val_q = _generate_value("dt_q", gen=gen_q, col_type="date")
         expected_q_month = ((today.month - 1) // 3) * 3 + 1
         self.assertEqual(val_q, date(today.year, expected_q_month, 1))
 
@@ -121,15 +111,10 @@ class TestGenerators(unittest.TestCase):
 
     def test_date_offset_generator(self):
         """date_offset вычисляет дату со сдвигом от ref_column."""
-        col = ColumnSpec(
-            name="end_date",
-            type="date",
-            generator=DateOffsetGenerator(ref_column="start_date", dim="y", min_offset=1, max_offset=3),
-        )
-
+        gen = DateOffsetGenerator(ref_column="start_date", dim="y", min_offset=1, max_offset=3)
         row_context = {"start_date": date(2026, 5, 10)}
         for _ in range(20):
-            val = _generate_value(col, row_context)
+            val = _generate_value("end_date", row_values=row_context, gen=gen, col_type="date")
             self.assertIsInstance(val, date)
             self.assertEqual(val.month, 5)
             self.assertEqual(val.day, 10)
@@ -137,32 +122,20 @@ class TestGenerators(unittest.TestCase):
             self.assertGreater(val, row_context["start_date"])
 
         # Базовая дата None -> возвращает None
-        self.assertIsNone(_generate_value(col, {"start_date": None}))
+        self.assertIsNone(_generate_value("end_date", row_values={"start_date": None}, gen=gen, col_type="date"))
 
     def test_null_ratio(self):
         """null_ratio=1.0 всегда дает None, null_ratio=0.0 никогда не дает None."""
-        col_null = ColumnSpec(
-            name="txt",
-            type="string",
-            generator=FakerGenerator(provider="word", null_ratio=1.0),
-        )
-        self.assertIsNone(_generate_value(col_null))
+        gen_null = FakerGenerator(provider="word", null_ratio=1.0)
+        self.assertIsNone(_generate_value("txt", gen=gen_null, col_type="string"))
 
-        col_not_null = ColumnSpec(
-            name="txt",
-            type="string",
-            generator=FakerGenerator(provider="word", null_ratio=0.0),
-        )
-        self.assertIsNotNone(_generate_value(col_not_null))
+        gen_not_null = FakerGenerator(provider="word", null_ratio=0.0)
+        self.assertIsNotNone(_generate_value("txt", gen=gen_not_null, col_type="string"))
 
     def test_faker_locale(self):
         """Faker с локалью ru_RU генерирует данные с кириллицей."""
-        col = ColumnSpec(
-            name="name",
-            type="string",
-            generator=FakerGenerator(provider="name", locale="ru_RU"),
-        )
-        val = _generate_value(col)
+        gen = FakerGenerator(provider="name", locale="ru_RU")
+        val = _generate_value("name", gen=gen, col_type="string")
         self.assertIsInstance(val, str)
         self.assertTrue(len(val) > 0)
 
@@ -181,13 +154,9 @@ class TestGenerators(unittest.TestCase):
             ChoiceGenerator(values=["A", "B"], weights=[0.0, 0.0])
 
         # Вес 100% на один элемент
-        col = ColumnSpec(
-            name="status",
-            type="string",
-            generator=ChoiceGenerator(values=["FIRST", "SECOND"], weights=[1.0, 0.0]),
-        )
+        gen = ChoiceGenerator(values=["FIRST", "SECOND"], weights=[1.0, 0.0])
         for _ in range(20):
-            self.assertEqual(_generate_value(col), "FIRST")
+            self.assertEqual(_generate_value("status", gen=gen, col_type="string"), "FIRST")
 
     def test_dag_generation_with_inverted_column_order(self):
         """Колонка end_date объявлена ПЕРЕД start_date в схеме таблицы.
@@ -199,26 +168,25 @@ class TestGenerators(unittest.TestCase):
             schema="dbo",
             primary_key=["contract_id"],
             columns=[
-                ColumnSpec(name="contract_id", type="bigint", generator=SequenceGenerator()),
-                # end_date объявлена раньше start_date!
-                ColumnSpec(
-                    name="contract_end_date",
-                    type="date",
-                    generator=DateOffsetGenerator(ref_column="contract_start_date", dim="y", min_offset=1, max_offset=3),
-                ),
-                ColumnSpec(
-                    name="contract_start_date",
-                    type="date",
-                    generator=RandomDateGenerator(),
-                ),
+                ColumnSpec(name="contract_id", type="bigint"),
+                ColumnSpec(name="contract_end_date", type="date"),
+                ColumnSpec(name="contract_start_date", type="date"),
             ],
             foreign_keys=[],
+        )
+        profile = TableRuleProfile(
+            columns={
+                "contract_id": SequenceGenerator(),
+                "contract_end_date": DateOffsetGenerator(ref_column="contract_start_date", dim="y", min_offset=1, max_offset=3),
+                "contract_start_date": RandomDateGenerator(),
+            }
         )
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
+        session = GenerationSession(conn, "mssql", live, table, profile)
 
-        _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1)
+        _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
 
         self.assertEqual(len(conn.cur.executed), 2)
         select_sql, _ = conn.cur.executed[0]
@@ -227,7 +195,6 @@ class TestGenerators(unittest.TestCase):
         insert_sql, params = conn.cur.executed[1]
         self.assertIn("INSERT INTO", insert_sql)
 
-        # Вытаскиваем список колонок из INSERT INTO [dbo].[contracts] (col1, col2...)
         cols_part = insert_sql.split("(")[1].split(")")[0]
         cols_inserted = [c.strip().strip("[]\"") for c in cols_part.split(",")]
         inserted_dict = dict(zip(cols_inserted, params))
@@ -247,26 +214,26 @@ class TestGenerators(unittest.TestCase):
             schema="dbo",
             primary_key=["id"],
             columns=[
-                ColumnSpec(name="id", type="bigint", generator=SequenceGenerator()),
-                ColumnSpec(
-                    name="col_a",
-                    type="date",
-                    generator=DateOffsetGenerator(ref_column="col_b", dim="y", min_offset=1, max_offset=2),
-                ),
-                ColumnSpec(
-                    name="col_b",
-                    type="date",
-                    generator=DateOffsetGenerator(ref_column="col_a", dim="y", min_offset=1, max_offset=2),
-                ),
+                ColumnSpec(name="id", type="bigint"),
+                ColumnSpec(name="col_a", type="date"),
+                ColumnSpec(name="col_b", type="date"),
             ],
             foreign_keys=[],
+        )
+        profile = TableRuleProfile(
+            columns={
+                "id": SequenceGenerator(),
+                "col_a": DateOffsetGenerator(ref_column="col_b", dim="y", min_offset=1, max_offset=2),
+                "col_b": DateOffsetGenerator(ref_column="col_a", dim="y", min_offset=1, max_offset=2),
+            }
         )
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
+        session = GenerationSession(conn, "mssql", live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1)
+            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
         self.assertIn("циклическая", str(ctx.exception).lower())
 
     def test_dag_unknown_ref_column(self):
@@ -276,19 +243,79 @@ class TestGenerators(unittest.TestCase):
             schema="dbo",
             primary_key=["id"],
             columns=[
-                ColumnSpec(name="id", type="bigint", generator=SequenceGenerator()),
-                ColumnSpec(
-                    name="end_date",
-                    type="date",
-                    generator=DateOffsetGenerator(ref_column="non_existent", dim="y", min_offset=1, max_offset=2),
-                ),
+                ColumnSpec(name="id", type="bigint"),
+                ColumnSpec(name="end_date", type="date"),
             ],
             foreign_keys=[],
+        )
+        profile = TableRuleProfile(
+            columns={
+                "id": SequenceGenerator(),
+                "end_date": DateOffsetGenerator(ref_column="non_existent", dim="y", min_offset=1, max_offset=2),
+            }
         )
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
+        session = GenerationSession(conn, "mssql", live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1)
+            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
         self.assertIn("неизвестную ref_column", str(ctx.exception))
+
+    def test_cumulative_balance_invariant(self):
+        """Инвариант cumulative_balance: баланс счета никогда не опускается ниже min_balance=0.0."""
+        table = TableSchema(
+            name="txs",
+            schema="dbo",
+            primary_key=["tx_id"],
+            columns=[
+                ColumnSpec(name="tx_id", type="bigint"),
+                ColumnSpec(name="account_id", type="bigint"),
+                ColumnSpec(name="amount", type="decimal(12,2)"),
+                ColumnSpec(name="tx_type", type="string"),
+            ],
+            foreign_keys=[],
+        )
+        profile = TableRuleProfile(
+            columns={
+                "tx_id": SequenceGenerator(),
+                "account_id": ChoiceGenerator(values=[1, 2]),
+            },
+            invariants=[
+                CumulativeBalanceInvariant(
+                    partition_by=["account_id"],
+                    amount_column="amount",
+                    type_column="tx_type",
+                    min_balance=0.0,
+                    deposit_prob=0.4,
+                    deposit_range=(100.0, 500.0),
+                    withdrawal_range=(10.0, 200.0),
+                )
+            ],
+        )
+
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.txs": table})
+        conn = FakeConn()
+        session = GenerationSession(conn, "mssql", live, table, profile)
+
+        running_balances = {1: 0.0, 2: 0.0}
+        for _ in range(50):
+            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            last_ins, params = conn.cur.executed[-1]
+            cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
+            row_dict = dict(zip(cols, params))
+            acc = row_dict["account_id"]
+            amt = float(row_dict["amount"])
+            tx_type = row_dict["tx_type"]
+
+            running_balances[acc] = round(running_balances[acc] + amt, 2)
+            self.assertGreaterEqual(
+                running_balances[acc],
+                0.0,
+                f"Отрицательный остаток {running_balances[acc]} на счете {acc} после транзакции {amt} ({tx_type})",
+            )
+            if amt > 0:
+                self.assertEqual(tx_type, "CREDIT")
+            else:
+                self.assertEqual(tx_type, "DEBIT")

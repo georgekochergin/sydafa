@@ -87,7 +87,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 elif isinstance(op, UpdateOp):
                     updated = update_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, random_rows=op.random_rows
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, random_rows=op.effective_limit
                     )
                     applied_records.append({
                         "step": step_idx,
@@ -99,7 +99,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 elif isinstance(op, DeleteOp):
                     deleted = delete_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, random_rows=op.random_rows
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, random_rows=op.effective_limit
                     )
                     applied_records.append({
                         "step": step_idx,

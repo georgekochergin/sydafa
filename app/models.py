@@ -99,7 +99,7 @@ GeneratorSpec = Annotated[
 ]
 
 
-# --- Спецификация колонок и таблиц ---
+# --- Спецификация колонок, инвариантов и правил генерации ---
 
 BATCH_ID_COLUMN = "_batch_id"
 EXEC_BATCH_ID_COLUMN = "_exec_batch_id"
@@ -118,12 +118,70 @@ class ColumnSpec(BaseModel):
 
     name: str
     type: str
-    generator: GeneratorSpec | None = None
 
     @field_validator("name")
     @classmethod
     def check_name(cls, v: str) -> str:
         return validate_identifier(v)
+
+
+# --- Инварианты связности данных и профили правил таблицы ---
+
+class CumulativeBalanceInvariant(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: Literal["cumulative_balance"] = "cumulative_balance"
+    partition_by: list[str] = Field(description="Колонки разреза счета (например, ['account_id'])")
+    amount_column: str = Field(description="Колонка суммы транзакции (приращения/дельты)")
+    type_column: str | None = Field(default=None, description="Опциональная колонка типа операции ('CREDIT'/'DEBIT')")
+    min_balance: float = Field(default=0.0, description="Минимальный допустимый баланс")
+    max_balance: float | None = Field(default=None, description="Максимальный допустимый баланс")
+    initial_balance: float = Field(default=0.0, description="Начальный остаток для нового счета при отсутствии в БД")
+    deposit_prob: float = Field(default=0.5, ge=0.0, le=1.0, description="Вероятность пополнения")
+    deposit_range: tuple[float, float] = Field(default=(10.0, 1000.0), description="Диапазон сумм пополнения [min, max]")
+    withdrawal_range: tuple[float, float] = Field(default=(10.0, 1000.0), description="Диапазон сумм списания [min, max]")
+    credit_value: str = Field(default="CREDIT", description="Значение типа операции для пополнения")
+    debit_value: str = Field(default="DEBIT", description="Значение типа операции для списания")
+    signed_amount: bool = Field(default=True, description="True: списание отрицательное (-X); False: модуль (|X|)")
+
+    @field_validator("partition_by")
+    @classmethod
+    def check_partition_cols(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("Список partition_by не может быть пустым")
+        return [validate_identifier(col) for col in v]
+
+    @field_validator("amount_column")
+    @classmethod
+    def check_amount_col(cls, v: str) -> str:
+        return validate_identifier(v)
+
+    @field_validator("type_column")
+    @classmethod
+    def check_type_col(cls, v: str | None) -> str | None:
+        if v is not None:
+            return validate_identifier(v)
+        return None
+
+    @field_validator("deposit_range", "withdrawal_range")
+    @classmethod
+    def check_ranges(cls, v: tuple[float, float]) -> tuple[float, float]:
+        min_v, max_v = v
+        if min_v <= 0 or max_v <= 0:
+            raise ValueError("Суммы диапазона должны быть строго больше 0")
+        if min_v > max_v:
+            raise ValueError(f"Минимум ({min_v}) не может превышать максимум ({max_v})")
+        return (float(min_v), float(max_v))
+
+
+TableInvariant = CumulativeBalanceInvariant
+
+
+class TableRuleProfile(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    columns: dict[str, GeneratorSpec] = Field(default_factory=dict, description="Маппинг колонка -> генератор")
+    invariants: list[TableInvariant] = Field(default_factory=list, description="Список инвариантов связности таблицы")
 
 
 class ForeignKey(BaseModel):
@@ -370,6 +428,11 @@ class UpdateOp(BaseModel):
     predicate: list[Condition] = Field(default_factory=list)
     set: dict[str, Any]
     random_rows: int | None = Field(default=None, gt=0)
+    limit: int | None = Field(default=None, gt=0, description="Обновить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
+
+    @property
+    def effective_limit(self) -> int | None:
+        return self.limit if self.limit is not None else self.random_rows
 
     @field_validator("schema_", "table")
     @classmethod
@@ -386,6 +449,11 @@ class DeleteOp(BaseModel):
     predicate: list[Condition] = Field(default_factory=list)
     cascade: bool = False
     random_rows: int | None = Field(default=None, gt=0)
+    limit: int | None = Field(default=None, gt=0, description="Удалить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
+
+    @property
+    def effective_limit(self) -> int | None:
+        return self.limit if self.limit is not None else self.random_rows
 
     @field_validator("schema_", "table")
     @classmethod
@@ -393,7 +461,7 @@ class DeleteOp(BaseModel):
         return validate_identifier(v)
 
 
-ExecOperation = Annotated[
+MigrateOperation = Annotated[
     Union[
         CreateSchemaOp,
         DropSchemaOp,
@@ -414,8 +482,42 @@ ExecOperation = Annotated[
 ]
 
 
-class ExecRequest(BaseModel):
-    operations: list[ExecOperation]
+class MigrateRequest(BaseModel):
+    operations: list[MigrateOperation]
+
+
+class MigrateResult(BaseModel):
+    status: str = "ok"
+    executed: int
+    applied: list[dict[str, Any]]
+
+
+# Алиасы операций исполнения
+ExecOperation = MigrateOperation
+ExecRequest = MigrateRequest
+ExecResult = MigrateResult
+
+
+# --- Декларативные модели sources.json ---
+
+class TableDeclSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    primary_key: list[str] = Field(default_factory=list)
+    columns: dict[str, str] = Field(
+        default_factory=dict,
+        description="Маппинг имя колонки -> SQL тип (например, 'amount': 'decimal(15,2)')",
+    )
+    foreign_keys: list[ForeignKey] = Field(default_factory=list)
+
+
+class SchemaDeclSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tables: dict[str, TableDeclSpec] = Field(
+        default_factory=dict,
+        description="Маппинг 'schema.table' -> TableDeclSpec",
+    )
 
 
 class SourceManifestSpec(BaseModel):
@@ -423,13 +525,11 @@ class SourceManifestSpec(BaseModel):
 
     type: Literal["mssql", "oracle"]
     external_port: int | None = None
-    operations: list[ExecOperation] = Field(default_factory=list)
-
-
-class ExecResult(BaseModel):
-    status: str = "ok"
-    executed: int
-    applied: list[dict[str, Any]]
+    schema_: SchemaDeclSpec = Field(default_factory=SchemaDeclSpec, alias="schema")
+    rules: dict[str, TableRuleProfile] = Field(
+        default_factory=dict,
+        description="Маппинг 'schema.table' -> TableRuleProfile",
+    )
 
 
 class AppendRequest(BaseModel):

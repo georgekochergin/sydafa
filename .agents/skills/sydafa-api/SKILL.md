@@ -1,6 +1,6 @@
 ---
 name: sydafa-api
-description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/exec.
+description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows, configure generation rules) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/migrate or /sources/{source}/rules/{schema.table}.
 ---
 
 # sydafa API: генерация JSON-тел запросов
@@ -26,14 +26,15 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 2. **Целевая ручка API** согласно актуальному коду:
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
-   - данные и эволюция схемы: `POST /sources/{source}/exec` (единый транзакционный DDL + DML метод);
+   - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод, алиас: `POST /sources/{source}/exec`);
+   - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{schema.table}` (установка правил для таблицы);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
 
 3. **JSON-тело для вставки** в Swagger UI.
 
-## Целевой эндпоинт: `POST /sources/{source}/exec`
+## Целевой эндпоинт миграций: `POST /sources/{source}/migrate`
 
 Принимает `{"operations": [...]}` — упорядоченный батч DDL и DML, который
 выполняется в единой транзакции (All-or-Nothing). Операции выполняются строго последовательно в порядке списка:
@@ -41,6 +42,33 @@ description: Use when the user asks to generate JSON request bodies for the syda
 Важно лишь соблюдать естественную причинную зависимость: схема создается до таблицы, таблица — до строк в ней, колонка — до операций с ней.
 
 `{source}` — имя источника (`mssql`, `oracle` или имя инстанса, например `billing`, `crm`).
+
+## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{schema.table}`
+
+Принимает профиль правил генерации `TableRuleProfile`:
+```json
+{
+  "columns": {
+    "account_id": {"kind": "choice", "values": [101, 102, 103]},
+    "client_id": {"kind": "choice", "values": [1, 2, 3]}
+  },
+  "invariants": [
+    {
+      "kind": "cumulative_balance",
+      "partition_by": ["account_id"],
+      "amount_column": "amount",
+      "type_column": "tx_type",
+      "min_balance": 0.0,
+      "deposit_prob": 0.5,
+      "deposit_range": [100.0, 5000.0],
+      "withdrawal_range": [50.0, 2000.0],
+      "credit_value": "CREDIT",
+      "debit_value": "DEBIT",
+      "signed_amount": true
+    }
+  ]
+}
+```
 
 ## Сводная матрица поддерживаемых операций (`operations[].op`)
 
@@ -67,8 +95,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
 |---|---|---|---|
 | `truncate` | `schema`, `table` | `cascade` (bool) | Очистка таблицы |
 | `append` | `schema`, `table`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
-| `update` | `schema`, `table`, `set` | `predicate` (list), `random_rows` (int) | Обновление строк по предикату и/или N случайных строк |
-| `delete` | `schema`, `table` | `predicate` (list), `cascade` (bool), `random_rows` (int) | Удаление строк по предикату и/или N случайных строк |
+| `update` | `schema`, `table`, `set` | `predicate` (list), `limit` / `random_rows` (int) | Обновление строк по предикату и/или не более N случайных строк |
+| `delete` | `schema`, `table` | `predicate` (list), `cascade` (bool), `limit` / `random_rows` (int) | Удаление строк по предикату и/или не более N случайных строк |
 
 ## Системные колонки и таблицы аудита (_batch_id, _exec_batch_id, _upd_, _del_)
 
@@ -107,7 +135,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
    - Не удалять колонки, входящие в `primary_key`.
    - Не удалять схему через `drop_schema`, если перед этим не были удалены (`drop_table`) или перенесены (`transfer_table`) все таблицы из нее.
    - Предикаты в `update` и `delete` принимают список условий: `{"column": "...", "operator": "=", "value": ...}`. Допустимые операторы: `=`, `!=`, `>`, `<`, `>=`, `<=`. Если предикат опущен или пуст, операция применяется ко всем строкам таблицы (или ко всей таблице с учетом `random_rows`).
-   - Опция `random_rows: N` в `update` и `delete` задаёт количество случайных строк для мутации. Если $N$ превышает доступное число строк, обрабатываются все строки. Работает для любых таблиц, включая таблицы без первичного ключа.
+   - Опция `limit: N` (синоним `random_rows: N`) в `update` и `delete` задаёт ограничение «не более N случайных строк» для мутации. Если подходящих строк меньше N, обрабатываются все найденные строки без падений.
+   - Для безопасного случайного удаления из финансовых таблиц с правилом `cumulative_balance` передается предикат `[{"column": "amount", "operator": "<=", "value": 0}]` с нужным `limit: N` (удаление расходов никогда не нарушает остаток).
 
 ## Пример полного сценария
 
