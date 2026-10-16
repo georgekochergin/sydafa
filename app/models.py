@@ -143,18 +143,16 @@ class CumulativeBalanceInvariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["cumulative_balance"] = "cumulative_balance"
-    partition_by: list[str] = Field(description="Колонки разреза счета (например, ['account_id'])")
     amount_column: str = Field(description="Колонка суммы транзакции (приращения/дельты)")
-    type_column: str | None = Field(default=None, description="Опциональная колонка типа операции ('CREDIT'/'DEBIT')")
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="Опциональные колонки разреза счета (например, ['account_id']). Если не указаны, баланс рассчитывается глобально для всей таблицы.",
+    )
     min_balance: float = Field(default=0.0, description="Минимальный допустимый баланс")
-    max_balance: float | None = Field(default=None, description="Максимальный допустимый баланс")
     initial_balance: float = Field(default=0.0, description="Начальный остаток для нового счета при отсутствии в БД")
     deposit_prob: float = Field(default=0.5, ge=0.0, le=1.0, description="Вероятность пополнения")
     deposit_range: tuple[float, float] = Field(default=(10.0, 1000.0), description="Диапазон сумм пополнения [min, max]")
     withdrawal_range: tuple[float, float] = Field(default=(10.0, 1000.0), description="Диапазон сумм списания [min, max]")
-    credit_value: str = Field(default="CREDIT", description="Значение типа операции для пополнения")
-    debit_value: str = Field(default="DEBIT", description="Значение типа операции для списания")
-    signed_amount: bool = Field(default=True, description="True: списание отрицательное (-X); False: модуль (|X|)")
     validate_existing: bool = Field(
         default=False,
         description="False: мягкий режим (мутации свободны, append балансирует); True: строгий режим с валидацией мутаций.",
@@ -163,21 +161,12 @@ class CumulativeBalanceInvariant(BaseModel):
     @field_validator("partition_by")
     @classmethod
     def check_partition_cols(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("Список partition_by не может быть пустым")
         return [validate_identifier(col) for col in v]
 
     @field_validator("amount_column")
     @classmethod
     def check_amount_col(cls, v: str) -> str:
         return validate_identifier(v)
-
-    @field_validator("type_column")
-    @classmethod
-    def check_type_col(cls, v: str | None) -> str | None:
-        if v is not None:
-            return validate_identifier(v)
-        return None
 
     @field_validator("deposit_range", "withdrawal_range")
     @classmethod

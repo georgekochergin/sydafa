@@ -262,18 +262,30 @@ class GenerationSession:
         for idx, inv in enumerate(self.profile.invariants):
             if isinstance(inv, CumulativeBalanceInvariant):
                 self.balances[idx] = {}
-                part_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.partition_by)
                 amt_col = quote_ident(inv.amount_column, self.dialect)
-                sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols}"
-                try:
-                    cur.execute(sql)
-                    rows = cur.fetchall()
-                    for r in rows:
-                        part_vals = tuple(r[: len(inv.partition_by)])
-                        sum_val = float(r[-1]) if r[-1] is not None else 0.0
-                        self.balances[idx][part_vals] = sum_val
-                except Exception:
-                    pass
+                if inv.partition_by:
+                    part_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.partition_by)
+                    sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols}"
+                    try:
+                        cur.execute(sql)
+                        rows = cur.fetchall()
+                        for r in rows:
+                            part_vals = tuple(r[: len(inv.partition_by)])
+                            sum_val = float(r[-1]) if r[-1] is not None else 0.0
+                            self.balances[idx][part_vals] = sum_val
+                    except Exception:
+                        pass
+                else:
+                    sql = f"SELECT SUM({amt_col}) FROM {qualified}"
+                    try:
+                        cur.execute(sql)
+                        rows = cur.fetchall()
+                        if rows and rows[0] and rows[0][0] is not None:
+                            self.balances[idx][()] = float(rows[0][0])
+                        else:
+                            self.balances[idx][()] = 0.0
+                    except Exception:
+                        pass
 
 
 def _resolve_fk_values(
@@ -338,10 +350,8 @@ def _mint_new_row(
     # Добавляем зависимости из инвариантов
     for inv in session.profile.invariants:
         if isinstance(inv, CumulativeBalanceInvariant):
-            if inv.amount_column in dependencies:
+            if inv.amount_column in dependencies and inv.partition_by:
                 dependencies[inv.amount_column].update(inv.partition_by)
-            if inv.type_column and inv.type_column in dependencies:
-                dependencies[inv.type_column].update(inv.partition_by)
 
     remaining = set(candidates.keys())
     while remaining:
@@ -361,13 +371,13 @@ def _mint_new_row(
             # Проверяем CumulativeBalanceInvariant
             inv_handled = False
             for idx, inv in enumerate(session.profile.invariants):
-                if isinstance(inv, CumulativeBalanceInvariant) and (c_name == inv.amount_column or (inv.type_column and c_name == inv.type_column)):
-                    if inv.amount_column in values and (not inv.type_column or inv.type_column in values):
+                if isinstance(inv, CumulativeBalanceInvariant) and c_name == inv.amount_column:
+                    if inv.amount_column in values:
                         # Уже вычислено в текущей строке
                         inv_handled = True
                         break
 
-                    part_vals = tuple(values.get(c) for c in inv.partition_by)
+                    part_vals = tuple(values.get(c) for c in inv.partition_by) if inv.partition_by else ()
                     curr_bal = session.balances.get(idx, {}).get(part_vals, inv.initial_balance)
 
                     max_withdrawal = round(curr_bal - inv.min_balance, 2)
@@ -376,28 +386,20 @@ def _mint_new_row(
                     if not can_withdraw or random.random() < inv.deposit_prob:
                         # Пополнение (Credit/Deposit)
                         amt = round(random.uniform(inv.deposit_range[0], inv.deposit_range[1]), 2)
-                        if inv.max_balance is not None and curr_bal + amt > inv.max_balance:
-                            amt = max(0.01, round(inv.max_balance - curr_bal, 2))
                         new_bal = round(curr_bal + amt, 2)
                         values[inv.amount_column] = amt
-                        if inv.type_column:
-                            values[inv.type_column] = inv.credit_value
                     else:
                         # Списание (Debit/Withdrawal)
                         w_hi = min(inv.withdrawal_range[1], max_withdrawal)
                         w_amt = round(random.uniform(inv.withdrawal_range[0], w_hi), 2)
                         new_bal = round(curr_bal - w_amt, 2)
-                        values[inv.amount_column] = -w_amt if inv.signed_amount else w_amt
-                        if inv.type_column:
-                            values[inv.type_column] = inv.debit_value
+                        values[inv.amount_column] = -w_amt
 
                     if idx not in session.balances:
                         session.balances[idx] = {}
                     session.balances[idx][part_vals] = new_bal
 
                     remaining.discard(inv.amount_column)
-                    if inv.type_column:
-                        remaining.discard(inv.type_column)
                     inv_handled = True
                     break
 

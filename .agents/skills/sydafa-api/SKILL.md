@@ -61,14 +61,10 @@ description: Use when the user asks to generate JSON request bodies for the syda
       "kind": "cumulative_balance",
       "partition_by": ["account_id"],
       "amount_column": "amount",
-      "type_column": "tx_type",
       "min_balance": 0.0,
       "deposit_prob": 0.5,
       "deposit_range": [100.0, 5000.0],
       "withdrawal_range": [50.0, 2000.0],
-      "credit_value": "CREDIT",
-      "debit_value": "DEBIT",
-      "signed_amount": true,
       "validate_existing": false
     }
   ]
