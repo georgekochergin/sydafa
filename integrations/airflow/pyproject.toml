@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sydafa-airflow"
+version = "0.1.0"
+description = "Airflow integration operators and hook for sydafa emulation service"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "sydafa contributors" }
+]
+dependencies = [
+    "apache-airflow>=2.6.0",
+    "requests>=2.28.0",
+]
+
+[project.entry-points."apache_airflow_provider"]
+provider_info = "sydafa_airflow.__init__:get_provider_info"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sydafa_airflow*"]

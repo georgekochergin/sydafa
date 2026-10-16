@@ -9,6 +9,7 @@
 - Внешний host-порт объявляется в `sources.json` (`external_port`) и возвращается в объекте `connection`. Объект `connection` содержит готовый `jdbc_url` (поле `parameters` удалено как избыточное). Поле `activated_until` всегда в формате ISO 8601 UTC (`Z`).
 - Источники данных объявляются в `sources.json` в декларативном формате (`schema`: структура таблиц с FQN `schema.table`, `rules`: профили правил колонок и инвариантов, например `cumulative_balance`). При первом старте создаются чистые таблицы и регистрируются правила генерации; первичное и последующее наполнение осуществляется через `POST /sources/{source}/migrate`.
 - В транзакционном API миграций (`POST /sources/{source}/migrate`) все операции над сущностями используют единый FQN атрибут `entity_fqn` в формате `schema.table`. В секции `foreign_keys` внешние ссылки адресуются через единый атрибут `ref_entity_fqn`. Операции обновления и удаления поддерживают лимит случайных строк через единый параметр `limit`.
+- Интеграционный слой для Apache Airflow: пакет `integrations/airflow/` (`sydafa-airflow`), включающий `SydafaHook` и операторы `SydafaActivateOperator`, `SydafaMigrateOperator`, `SydafaDeactivateOperator`. Параметр `conn_id: str` обязателен.
 - `/health` = готовность API, не прогрев СУБД.
 
 ## Синхронизация документации (Documentation as Code)
