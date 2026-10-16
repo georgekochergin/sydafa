@@ -122,13 +122,12 @@ def validate_table_invariants_on_data(
         cur = active_conn.cursor()
         for inv in profile.invariants:
             if isinstance(inv, CumulativeBalanceInvariant):
-                part_cols = ", ".join(quote_ident(c, dialect) for c in inv.partition_by)
                 amt_col = quote_ident(inv.amount_column, dialect)
-                having_clauses = [f"SUM({amt_col}) < {inv.min_balance}"]
-                if inv.max_balance is not None:
-                    having_clauses.append(f"SUM({amt_col}) > {inv.max_balance}")
-                having_str = " OR ".join(having_clauses)
-                sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols} HAVING {having_str}"
+                if inv.partition_by:
+                    part_cols = ", ".join(quote_ident(c, dialect) for c in inv.partition_by)
+                    sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols} HAVING SUM({amt_col}) < {inv.min_balance}"
+                else:
+                    sql = f"SELECT SUM({amt_col}) FROM {qualified} HAVING SUM({amt_col}) < {inv.min_balance}"
                 try:
                     cur.execute(sql)
                     violations = cur.fetchall()
@@ -138,13 +137,16 @@ def validate_table_invariants_on_data(
 
                 if violations:
                     sample = violations[0]
-                    part_vals = sample[: len(inv.partition_by)]
                     sum_val = sample[-1]
-                    max_limit_str = f", max_balance={inv.max_balance}" if inv.max_balance is not None else ""
+                    if inv.partition_by:
+                        part_vals = list(sample[: len(inv.partition_by)])
+                        part_desc = f"для партиции {part_vals} "
+                    else:
+                        part_desc = "глобальный "
                     raise ValueError(
                         f"Невозможно применить правило cumulative_balance к таблице '{table_fqn}': "
-                        f"для партиции {list(part_vals)} текущий накопленный баланс равен {sum_val}, "
-                        f"что нарушает ограничение min_balance={inv.min_balance}{max_limit_str}"
+                        f"{part_desc}текущий накопленный баланс равен {sum_val}, "
+                        f"что нарушает ограничение min_balance={inv.min_balance}"
                     )
 
     if conn is not None:

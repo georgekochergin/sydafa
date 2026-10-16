@@ -273,7 +273,6 @@ class TestGenerators(unittest.TestCase):
                 ColumnSpec(name="tx_id", type="bigint"),
                 ColumnSpec(name="account_id", type="bigint"),
                 ColumnSpec(name="amount", type="decimal(12,2)"),
-                ColumnSpec(name="tx_type", type="string"),
             ],
             foreign_keys=[],
         )
@@ -286,7 +285,6 @@ class TestGenerators(unittest.TestCase):
                 CumulativeBalanceInvariant(
                     partition_by=["account_id"],
                     amount_column="amount",
-                    type_column="tx_type",
                     min_balance=0.0,
                     deposit_prob=0.4,
                     deposit_range=(100.0, 500.0),
@@ -307,18 +305,57 @@ class TestGenerators(unittest.TestCase):
             row_dict = dict(zip(cols, params))
             acc = row_dict["account_id"]
             amt = float(row_dict["amount"])
-            tx_type = row_dict["tx_type"]
 
             running_balances[acc] = round(running_balances[acc] + amt, 2)
             self.assertGreaterEqual(
                 running_balances[acc],
                 0.0,
-                f"Отрицательный остаток {running_balances[acc]} на счете {acc} после транзакции {amt} ({tx_type})",
+                f"Отрицательный остаток {running_balances[acc]} на счете {acc} после транзакции {amt}",
             )
-            if amt > 0:
-                self.assertEqual(tx_type, "CREDIT")
-            else:
-                self.assertEqual(tx_type, "DEBIT")
+
+    def test_cumulative_balance_global_no_partition(self):
+        """Инвариант cumulative_balance без указания partition_by (глобальный баланс всей таблицы)."""
+        table = TableSchema(
+            name="vault",
+            schema="dbo",
+            primary_key=["tx_id"],
+            columns=[
+                ColumnSpec(name="tx_id", type="bigint"),
+                ColumnSpec(name="amount", type="decimal(12,2)"),
+            ],
+            foreign_keys=[],
+        )
+        profile = TableRuleProfile(
+            columns={"tx_id": SequenceGenerator()},
+            invariants=[
+                CumulativeBalanceInvariant(
+                    amount_column="amount",
+                    min_balance=0.0,
+                    deposit_prob=0.5,
+                    deposit_range=(50.0, 300.0),
+                    withdrawal_range=(10.0, 150.0),
+                )
+            ],
+        )
+
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.vault": table})
+        conn = FakeConn()
+        session = GenerationSession(conn, "mssql", live, table, profile)
+
+        global_balance = 0.0
+        for _ in range(30):
+            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            last_ins, params = conn.cur.executed[-1]
+            cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
+            row_dict = dict(zip(cols, params))
+            amt = float(row_dict["amount"])
+
+            global_balance = round(global_balance + amt, 2)
+            self.assertGreaterEqual(
+                global_balance,
+                0.0,
+                f"Отрицательный глобальный остаток {global_balance} после транзакции {amt}",
+            )
 
     def test_append_rebalances_negative_balance(self):
         """Если после ручного update/delete счет ушел в минус, append форсирует пополнения."""
@@ -330,7 +367,6 @@ class TestGenerators(unittest.TestCase):
                 ColumnSpec(name="tx_id", type="bigint"),
                 ColumnSpec(name="account_id", type="bigint"),
                 ColumnSpec(name="amount", type="decimal(12,2)"),
-                ColumnSpec(name="tx_type", type="string"),
             ],
             foreign_keys=[],
         )
@@ -343,7 +379,6 @@ class TestGenerators(unittest.TestCase):
                 CumulativeBalanceInvariant(
                     partition_by=["account_id"],
                     amount_column="amount",
-                    type_column="tx_type",
                     min_balance=0.0,
                     deposit_prob=0.1,  # даже при 10% вероятности депозита, при отрицательном балансе депозит форсируется 100%!
                     deposit_range=(100.0, 500.0),
@@ -359,14 +394,12 @@ class TestGenerators(unittest.TestCase):
         # Имитируем, что в результате предыдущих update/delete баланс счета 999 ушел в глубокий минус (-1000.00)
         session.balances[0] = {(999,): -1000.0}
 
-        # Все первые транзакции ОБЯЗАНЫ быть пополнениями (CREDIT), пока баланс не выйдет из дефицита!
+        # Все первые транзакции ОБЯЗАНЫ быть пополнениями (> 0), пока баланс не выйдет из дефицита!
         for _ in range(3):
             _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
             amt = float(row_dict["amount"])
-            tx_type = row_dict["tx_type"]
 
             self.assertGreater(amt, 0.0, "При отрицательном остатке списания должны быть заблокированы!")
-            self.assertEqual(tx_type, "CREDIT")
