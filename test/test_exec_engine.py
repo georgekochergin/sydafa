@@ -57,8 +57,8 @@ def _build_live_with_audit() -> LiveSchema:
             name="customers",
             primary_key=["customer_id"],
             columns=[
-                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
-                ColumnSpec(name="name", type="string", generator={"kind": "faker", "provider": "company"}),
+                ColumnSpec(name="customer_id", type="bigint"),
+                ColumnSpec(name="name", type="string"),
             ],
         ),
         "oracle",

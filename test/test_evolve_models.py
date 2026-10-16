@@ -58,9 +58,9 @@ class TestEvolveModels(unittest.TestCase):
         self.assertEqual(rdate.kind, "random_date")
 
     def test_column_spec(self):
-        col = ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"})
+        col = ColumnSpec(name="customer_id", type="bigint")
         self.assertEqual(col.name, "customer_id")
-        self.assertEqual(col.generator.kind, "sequence")
+        self.assertEqual(col.type, "bigint")
 
         # Invalid identifier with spaces
         with self.assertRaises(ValidationError):

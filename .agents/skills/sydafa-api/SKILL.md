@@ -1,6 +1,6 @@
 ---
 name: sydafa-api
-description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/exec.
+description: Use when the user asks to generate JSON request bodies for the sydafa API (create/drop/rename schemas and tables, add/drop/rename columns, transfer tables, append/update/delete/truncate rows, configure generation rules) from natural-language requirements. Produces the Swagger UI link, the target endpoint, and a ready JSON body for POST /sources/{source}/migrate or /sources/{source}/rules/{schema.table}.
 ---
 
 # sydafa API: генерация JSON-тел запросов
@@ -25,14 +25,15 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 2. **Целевая ручка API** согласно актуальному коду:
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
-   - данные и эволюция схемы: `POST /sources/{source}/exec` (единый транзакционный DDL + DML метод);
+   - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод, алиас: `POST /sources/{source}/exec`);
+   - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{schema.table}` (установка правил для таблицы);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
 
 3. **JSON-тело для вставки** в Swagger UI.
 
-## Целевой эндпоинт: `POST /sources/{source}/exec`
+## Целевой эндпоинт миграций: `POST /sources/{source}/migrate`
 
 Принимает `{"operations": [...]}` — упорядоченный батч DDL и DML, который
 выполняется в единой транзакции (All-or-Nothing). Операции выполняются строго последовательно в порядке списка:
@@ -40,6 +41,31 @@ description: Use when the user asks to generate JSON request bodies for the syda
 Важно лишь соблюдать естественную причинную зависимость: схема создается до таблицы, таблица — до строк в ней, колонка — до операций с ней.
 
 `{source}` — имя источника (`mssql`, `oracle` или имя инстанса, например `billing`, `crm`).
+
+## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{schema.table}`
+
+Принимает профиль правил генерации `TableRuleProfile`:
+```json
+{
+  "columns": {
+    "account_id": {"kind": "choice", "values": [101, 102, 103]},
+    "client_id": {"kind": "choice", "values": [1, 2, 3]}
+  },
+  "invariants": [
+    {
+      "kind": "functional_dependency",
+      "determinant": ["account_id"],
+      "dependent": ["client_id"]
+    },
+    {
+      "kind": "cumulative_balance",
+      "partition_by": ["account_id"],
+      "amount_column": "amount",
+      "min_balance": 0.0
+    }
+  ]
+}
+```
 
 ## Сводная матрица поддерживаемых операций (`operations[].op`)
 

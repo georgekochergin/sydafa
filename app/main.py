@@ -7,17 +7,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
-from . import container_manager, exec_engine, schema_state, sources
+from . import container_manager, exec_engine, rules_state, schema_state, sources
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
 from .exec_engine import ExecError
 from .models import (
-    ExecRequest,
-    ExecResult,
     LiveSchema,
+    MigrateRequest,
+    MigrateResult,
     SourceInfo,
     SourceLifecycleStatus,
     SourceReinitResult,
     TableRef,
+    TableRuleProfile,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -185,10 +186,12 @@ def reinit_source_endpoint(source: str):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Не удалось реинициализировать '{source}': {exc}") from exc
 
 
-# ==================== DATA & SCHEMA API (Транзакционный DDL + DML) ====================
+# ==================== DATA & SCHEMA MIGRATION API (Транзакционный DDL + DML) ====================
 
-@app.post("/sources/{source}/exec", response_model=ExecResult)
-def exec_source(source: str, req: ExecRequest, request: Request):
+@app.post("/sources/{source}/migrate", response_model=MigrateResult)
+@app.post("/sources/{source}/exec", response_model=MigrateResult, include_in_schema=False)
+def migrate_source(source: str, req: MigrateRequest, request: Request):
+    """Выполняет упорядоченный батч операций DDL и DML в единой All-or-Nothing транзакции."""
     _assert_source(source)
     request_host = request.url.hostname if request else None
     _wake(source, request_host=request_host)
@@ -198,5 +201,51 @@ def exec_source(source: str, req: ExecRequest, request: Request):
         code = status.HTTP_409_CONFLICT if exc.is_conflict else status.HTTP_422_UNPROCESSABLE_ENTITY
         raise HTTPException(code, str(exc)) from exc
     except Exception as exc:
-        logger.exception("Непредвиденная ошибка при /sources/%s/exec: %s", source, exc)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка выполнения exec: {exc}") from exc
+        logger.exception("Непредвиденная ошибка при /sources/%s/migrate: %s", source, exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Ошибка выполнения migrate: {exc}") from exc
+
+
+# ==================== DATA GENERATION RULES API (Профили правил данных) ====================
+
+@app.get("/sources/{source}/rules", response_model=dict[str, TableRuleProfile])
+def list_source_rules(source: str):
+    """Возвращает все зарегистрированные профили правил генерации для источника."""
+    _assert_source(source)
+    return rules_state.get_all_rules(source)
+
+
+@app.get("/sources/{source}/rules/{table_fqn:path}", response_model=TableRuleProfile)
+def get_table_rule_profile(source: str, table_fqn: str):
+    """Возвращает профиль правил генерации конкретной таблицы schema.table."""
+    _assert_source(source)
+    try:
+        profile = rules_state.get_table_rules(source, table_fqn)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для таблицы '{table_fqn}' правила генерации не найдены")
+    return profile
+
+
+@app.put("/sources/{source}/rules/{table_fqn:path}", response_model=TableRuleProfile)
+def set_table_rule_profile(source: str, table_fqn: str, profile: TableRuleProfile):
+    """Устанавливает или перезаписывает профиль правил генерации для таблицы schema.table."""
+    _assert_source(source)
+    try:
+        rules_state.set_table_rules(source, table_fqn, profile)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    return profile
+
+
+@app.delete("/sources/{source}/rules/{table_fqn:path}")
+def delete_table_rule_profile(source: str, table_fqn: str):
+    """Сбрасывает профиль правил генерации таблицы schema.table."""
+    _assert_source(source)
+    try:
+        deleted = rules_state.delete_table_rules(source, table_fqn)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    if not deleted:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для таблицы '{table_fqn}' правила генерации не найдены")
+    return {"status": "ok", "deleted": table_fqn}

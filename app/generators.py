@@ -12,9 +12,13 @@ from .models import (
     BATCH_ID_COLUMN,
     ColumnSpec,
     Condition,
+    CumulativeBalanceInvariant,
     EXEC_BATCH_ID_COLUMN,
     ForeignKey,
+    FunctionalDependencyInvariant,
+    GeneratorSpec,
     LiveSchema,
+    TableRuleProfile,
     TableSchema,
 )
 from .render_ddl import qualify_table, quote_ident
@@ -77,9 +81,33 @@ def _shift_date(base: date, dim: str, offset: int) -> date:
     raise GeneratorError(f"Неизвестная размерность dim: '{dim}'. Разрешены 'y', 'm', 'd'")
 
 
-def _generate_value(col: ColumnSpec, row_values: dict[str, Any] | None = None) -> Any:
-    gen = col.generator
+def _generate_value(
+    col: ColumnSpec | str,
+    row_values: dict[str, Any] | None = None,
+    gen: GeneratorSpec | None = None,
+    col_type: str | None = None,
+) -> Any:
+    if isinstance(col, ColumnSpec):
+        col_name = col.name
+        col_type = col.type
+        if gen is None:
+            gen = getattr(col, "generator", None)
+    else:
+        col_name = str(col)
+        col_type = col_type or "string"
+
+    # Если явный генератор не задан, генерируем синтетическое значение по типу колонки
     if gen is None:
+        t_lower = col_type.lower()
+        if "int" in t_lower:
+            return random.randint(1, 10000)
+        if "decimal" in t_lower or "numeric" in t_lower or "float" in t_lower:
+            return round(random.uniform(10.0, 5000.0), 2)
+        if "date" in t_lower or "time" in t_lower:
+            today = date.today()
+            return today - timedelta(days=random.randint(0, 365))
+        if "char" in t_lower or "str" in t_lower or "text" in t_lower:
+            return _get_faker("ru_RU").word()
         return None
 
     null_ratio = getattr(gen, "null_ratio", None)
@@ -209,6 +237,63 @@ def _find_table(live: LiveSchema, schema: str, table_name: str) -> TableSchema:
     raise GeneratorError(f"Таблица '{key}' не найдена в схеме источника")
 
 
+class GenerationSession:
+    """Сессия генерации данных с кэшированием функциональных зависимостей и балансов."""
+
+    def __init__(
+        self,
+        conn: Any,
+        dialect: str,
+        live: LiveSchema,
+        table: TableSchema,
+        profile: TableRuleProfile,
+    ):
+        self.conn = conn
+        self.dialect = dialect
+        self.live = live
+        self.table = table
+        self.profile = profile
+        self.fd_mappings: dict[int, dict[tuple[Any, ...], tuple[Any, ...]]] = {}
+        self.balances: dict[int, dict[tuple[Any, ...], float]] = {}
+        self._preload_state()
+
+    def _preload_state(self) -> None:
+        qualified = qualify_table(self.table.schema_, self.table.name, self.dialect)
+        cur = self.conn.cursor()
+
+        for idx, inv in enumerate(self.profile.invariants):
+            if isinstance(inv, FunctionalDependencyInvariant):
+                self.fd_mappings[idx] = {}
+                det_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.determinant)
+                dep_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.dependent)
+                sql = f"SELECT DISTINCT {det_cols}, {dep_cols} FROM {qualified}"
+                try:
+                    cur.execute(sql)
+                    rows = cur.fetchall()
+                    for r in rows:
+                        det_vals = tuple(r[: len(inv.determinant)])
+                        dep_vals = tuple(r[len(inv.determinant) :])
+                        if det_vals not in self.fd_mappings[idx]:
+                            self.fd_mappings[idx][det_vals] = dep_vals
+                except Exception:
+                    pass
+
+            elif isinstance(inv, CumulativeBalanceInvariant):
+                self.balances[idx] = {}
+                part_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.partition_by)
+                amt_col = quote_ident(inv.amount_column, self.dialect)
+                sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols}"
+                try:
+                    cur.execute(sql)
+                    rows = cur.fetchall()
+                    for r in rows:
+                        part_vals = tuple(r[: len(inv.partition_by)])
+                        sum_val = float(r[-1]) if r[-1] is not None else 0.0
+                        self.balances[idx][part_vals] = sum_val
+                except Exception:
+                    pass
+
+
 def _resolve_fk_values(
     conn, source: str, dialect: str, live: LiveSchema, fk: ForeignKey, current_schema: str, new_key_ratio: float, batch_id: int
 ) -> dict[str, Any]:
@@ -224,10 +309,23 @@ def _resolve_fk_values(
 
 
 def _mint_new_row(
-    conn, source: str, dialect: str, live: LiveSchema, table: TableSchema, new_key_ratio: float, batch_id: int = 1
+    conn,
+    source: str,
+    dialect: str,
+    live: LiveSchema,
+    table: TableSchema,
+    new_key_ratio: float,
+    batch_id: int = 1,
+    session: GenerationSession | None = None,
 ) -> dict[str, Any]:
     qualified = qualify_table(table.schema_, table.name, dialect)
     values: dict[str, Any] = {}
+
+    if session is None:
+        from . import rules_state
+        table_fqn = f"{table.schema_}.{table.name}"
+        profile = rules_state.get_table_rules(source, table_fqn) or TableRuleProfile()
+        session = GenerationSession(conn, dialect, live, table, profile)
 
     for fk in table.foreign_keys:
         values.update(_resolve_fk_values(conn, source, dialect, live, fk, table.schema_, new_key_ratio, batch_id))
@@ -236,6 +334,7 @@ def _mint_new_row(
     dependencies: dict[str, set[str]] = {}
     all_table_column_names = {c.name for c in table.columns}
 
+    # Построение графа зависимостей
     for col in table.columns:
         if col.name in table.primary_key or _fk_for_column(table, col.name):
             continue
@@ -244,7 +343,7 @@ def _mint_new_row(
         candidates[col.name] = col
 
         deps: set[str] = set()
-        gen = col.generator
+        gen = session.profile.columns.get(col.name) or getattr(col, "generator", None)
         if gen is not None and getattr(gen, "kind", None) == "date_offset":
             ref = getattr(gen, "ref_column", None)
             if not ref or ref not in all_table_column_names:
@@ -253,6 +352,18 @@ def _mint_new_row(
                 )
             deps.add(ref)
         dependencies[col.name] = deps
+
+    # Добавляем зависимости из инвариантов
+    for inv in session.profile.invariants:
+        if isinstance(inv, FunctionalDependencyInvariant):
+            for dep_col in inv.dependent:
+                if dep_col in dependencies:
+                    dependencies[dep_col].update(inv.determinant)
+        elif isinstance(inv, CumulativeBalanceInvariant):
+            if inv.amount_column in dependencies:
+                dependencies[inv.amount_column].update(inv.partition_by)
+            if inv.type_column and inv.type_column in dependencies:
+                dependencies[inv.type_column].update(inv.partition_by)
 
     remaining = set(candidates.keys())
     while remaining:
@@ -267,7 +378,82 @@ def _mint_new_row(
 
         for c_name in ready:
             col = candidates[c_name]
-            values[c_name] = _generate_value(col, values)
+            gen = session.profile.columns.get(c_name) or getattr(col, "generator", None)
+
+            # Проверяем FunctionalDependencyInvariant
+            handled = False
+            for idx, inv in enumerate(session.profile.invariants):
+                if isinstance(inv, FunctionalDependencyInvariant) and c_name in inv.dependent:
+                    det_vals = tuple(values.get(c) for c in inv.determinant)
+                    if det_vals in session.fd_mappings.get(idx, {}):
+                        dep_cached = session.fd_mappings[idx][det_vals]
+                        c_idx = inv.dependent.index(c_name)
+                        values[c_name] = dep_cached[c_idx]
+                        handled = True
+                        break
+                    else:
+                        val = _generate_value(col, values, gen=gen)
+                        values[c_name] = val
+                        # Если все dependent сгенерированы, кэшируем
+                        if all(dc in values for dc in inv.dependent):
+                            dep_vals = tuple(values[dc] for dc in inv.dependent)
+                            if idx not in session.fd_mappings:
+                                session.fd_mappings[idx] = {}
+                            session.fd_mappings[idx][det_vals] = dep_vals
+                        handled = True
+                        break
+
+            if handled:
+                remaining.remove(c_name)
+                continue
+
+            # Проверяем CumulativeBalanceInvariant
+            inv_handled = False
+            for idx, inv in enumerate(session.profile.invariants):
+                if isinstance(inv, CumulativeBalanceInvariant) and (c_name == inv.amount_column or (inv.type_column and c_name == inv.type_column)):
+                    if inv.amount_column in values and (not inv.type_column or inv.type_column in values):
+                        # Уже вычислено в текущей строке
+                        inv_handled = True
+                        break
+
+                    part_vals = tuple(values.get(c) for c in inv.partition_by)
+                    curr_bal = session.balances.get(idx, {}).get(part_vals, inv.initial_balance)
+
+                    max_withdrawal = round(curr_bal - inv.min_balance, 2)
+                    can_withdraw = max_withdrawal >= inv.withdrawal_range[0]
+
+                    if not can_withdraw or random.random() < inv.deposit_prob:
+                        # Пополнение (Credit/Deposit)
+                        amt = round(random.uniform(inv.deposit_range[0], inv.deposit_range[1]), 2)
+                        if inv.max_balance is not None and curr_bal + amt > inv.max_balance:
+                            amt = max(0.01, round(inv.max_balance - curr_bal, 2))
+                        new_bal = round(curr_bal + amt, 2)
+                        values[inv.amount_column] = amt
+                        if inv.type_column:
+                            values[inv.type_column] = inv.credit_value
+                    else:
+                        # Списание (Debit/Withdrawal)
+                        w_hi = min(inv.withdrawal_range[1], max_withdrawal)
+                        w_amt = round(random.uniform(inv.withdrawal_range[0], w_hi), 2)
+                        new_bal = round(curr_bal - w_amt, 2)
+                        values[inv.amount_column] = -w_amt if inv.signed_amount else w_amt
+                        if inv.type_column:
+                            values[inv.type_column] = inv.debit_value
+
+                    if idx not in session.balances:
+                        session.balances[idx] = {}
+                    session.balances[idx][part_vals] = new_bal
+
+                    remaining.discard(inv.amount_column)
+                    if inv.type_column:
+                        remaining.discard(inv.type_column)
+                    inv_handled = True
+                    break
+
+            if inv_handled:
+                continue
+
+            values[c_name] = _generate_value(col, values, gen=gen)
             remaining.remove(c_name)
 
     for pk_col in table.primary_key:
@@ -284,8 +470,12 @@ def append_rows_conn(
     conn: Any, source: str, dialect: str, live: LiveSchema, schema: str, table_name: str, rows: int, new_key_ratio: float, batch_id: int = 1
 ) -> int:
     table = _find_table(live, schema, table_name)
+    from . import rules_state
+    table_fqn = f"{schema}.{table_name}"
+    profile = rules_state.get_table_rules(source, table_fqn) or TableRuleProfile()
+    session = GenerationSession(conn, dialect, live, table, profile)
     for _ in range(rows):
-        _mint_new_row(conn, source, dialect, live, table, new_key_ratio, batch_id)
+        _mint_new_row(conn, source, dialect, live, table, new_key_ratio, batch_id, session=session)
     return rows
 
 

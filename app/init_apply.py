@@ -225,10 +225,93 @@ def check_and_heal_orphaned_state() -> None:
         )
 
 
+def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecOperation]:
+    """Транслирует декларативное описание schema из sources.json в упорядоченный батч DDL операций."""
+    tables_dict = schema_data.get("tables", {})
+    if not isinstance(tables_dict, dict) or not tables_dict:
+        return []
+
+    from .models import ColumnSpec, CreateSchemaOp, CreateTableOp, ForeignKey
+    from .rules_state import validate_table_fqn
+
+    schemas: list[str] = []
+    parsed_tables: list[tuple[str, str, dict[str, Any]]] = []
+    for fqn, t_spec in tables_dict.items():
+        schema_name, table_name = validate_table_fqn(fqn)
+        if schema_name not in schemas:
+            schemas.append(schema_name)
+        parsed_tables.append((schema_name, table_name, t_spec if isinstance(t_spec, dict) else {}))
+
+    operations: list[ExecOperation] = [CreateSchemaOp(name=s) for s in schemas]
+
+    # Топологическая сортировка таблиц по Foreign Keys (родительские таблицы перед дочерними)
+    deps: dict[str, set[str]] = {}
+    table_map: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    for s_name, t_name, t_spec in parsed_tables:
+        fqn = f"{s_name}.{t_name}"
+        table_map[fqn] = (s_name, t_name, t_spec)
+        fks_raw = t_spec.get("foreign_keys", [])
+        t_deps: set[str] = set()
+        for fk in fks_raw:
+            ref_tbl = fk.get("ref_table") if isinstance(fk, dict) else getattr(fk, "ref_table", None)
+            ref_sch = (fk.get("ref_schema") if isinstance(fk, dict) else getattr(fk, "ref_schema", None)) or s_name
+            if ref_tbl:
+                ref_fqn = f"{ref_sch}.{ref_tbl}"
+                if ref_fqn != fqn and ref_fqn in tables_dict:
+                    t_deps.add(ref_fqn)
+        deps[fqn] = t_deps
+
+    remaining = set(table_map.keys())
+    sorted_fqns: list[str] = []
+    while remaining:
+        ready = [fqn for fqn in remaining if deps[fqn].issubset(set(sorted_fqns))]
+        if not ready:
+            sorted_fqns.extend(sorted(remaining))
+            break
+        for fqn in ready:
+            sorted_fqns.append(fqn)
+            remaining.remove(fqn)
+
+    for fqn in sorted_fqns:
+        s_name, t_name, t_spec = table_map[fqn]
+        pk = t_spec.get("primary_key", [])
+        raw_cols = t_spec.get("columns", {})
+        col_specs: list[ColumnSpec] = []
+        if isinstance(raw_cols, dict):
+            for col_name, col_type in raw_cols.items():
+                col_specs.append(ColumnSpec(name=col_name, type=col_type))
+        elif isinstance(raw_cols, list):
+            for c in raw_cols:
+                if isinstance(c, dict):
+                    col_specs.append(ColumnSpec(name=c["name"], type=c["type"]))
+                elif hasattr(c, "name") and hasattr(c, "type"):
+                    col_specs.append(ColumnSpec(name=c.name, type=c.type))
+
+        fks_list: list[ForeignKey] = []
+        for fk in t_spec.get("foreign_keys", []):
+            if isinstance(fk, dict):
+                fks_list.append(ForeignKey(**fk))
+            elif isinstance(fk, ForeignKey):
+                fks_list.append(fk)
+
+        operations.append(
+            CreateTableOp(
+                schema=s_name,
+                name=t_name,
+                primary_key=pk,
+                columns=col_specs,
+                foreign_keys=fks_list,
+            )
+        )
+
+    return operations
+
+
 def apply_init_for_source(source: str) -> None:
-    """Применяет DDL и DML операции из sources.json для указанного источника.
+    """Применяет DDL схемы и правила из sources.json для указанного источника.
     
-    Если источник уже был инициализирован ранее, повторный накат операций пропускается.
+    Если источник уже был инициализирован ранее, повторный накат пропускается.
+    Автозаливка данных (init_data) исключена: создаются чистые таблицы и правила.
     """
     if is_source_initialized(source):
         logger.info("Источник '%s' уже инициализирован ранее. Повторный сид операций игнорируется.", source)
@@ -241,20 +324,47 @@ def apply_init_for_source(source: str) -> None:
         return
 
     val = init_sources[source]
-    if isinstance(val, dict):
-        raw_ops = val.get("operations", [])
-    else:
-        raw_ops = val if isinstance(val, list) else []
+    if not isinstance(val, dict):
+        val = {}
 
-    # Наполнение источника через логику POST /sources/{source}/exec
-    if raw_ops:
-        logger.info("Манифест sources.json: выполнение %d операций exec для '%s'...", len(raw_ops), source)
-        from . import exec_engine
-        adapter = TypeAdapter(list[ExecOperation])
-        ops = adapter.validate_python(raw_ops)
-        exec_engine.execute_source_operations(source, ops)
+    from . import exec_engine
+
+    # 1. Загрузка правил генерации rules (если заданы)
+    rules_raw = val.get("rules", {})
+    if isinstance(rules_raw, dict) and rules_raw:
+        from .models import TableRuleProfile
+        from .rules_state import set_table_rules
+        logger.info("Манифест sources.json: сохранение %d профилей правил для '%s'...", len(rules_raw), source)
+        for table_fqn, prof_data in rules_raw.items():
+            try:
+                prof = TableRuleProfile(**prof_data) if isinstance(prof_data, dict) else prof_data
+                set_table_rules(source, table_fqn, prof)
+            except Exception as e:
+                logger.warning("Не удалось сохранить профиль правил для '%s.%s': %s", source, table_fqn, e)
+
+    # 2. Декларативная схема schema (приоритетный формат)
+    schema_raw = val.get("schema", {})
+    if isinstance(schema_raw, dict) and schema_raw.get("tables"):
+        ddl_ops = compile_schema_decl_to_operations(schema_raw)
+        logger.info("Манифест sources.json: выполнение %d DDL операций декларативной схемы для '%s'...", len(ddl_ops), source)
+        exec_engine.execute_source_operations(source, ddl_ops)
+
+    # 3. Поддержка legacy operations (только DDL, исключая автозаливку append)
+    elif "operations" in val:
+        raw_ops = val.get("operations", [])
+        if raw_ops:
+            adapter = TypeAdapter(list[ExecOperation])
+            parsed_ops = adapter.validate_python(raw_ops)
+            # Исключаем append операции для соблюдения принципа чистой схемы без init_data
+            filtered_ops = [op for op in parsed_ops if getattr(op, "op", "") != "append"]
+            if filtered_ops:
+                logger.info("Манифест sources.json: выполнение %d legacy DDL операций для '%s'...", len(filtered_ops), source)
+                exec_engine.execute_source_operations(source, filtered_ops)
+            else:
+                logger.info("Манифест sources.json: для источника '%s' нет DDL операций.", source)
+
     else:
-        logger.info("Манифест sources.json: для источника '%s' нет операций (чистая база).", source)
+        logger.info("Манифест sources.json: для источника '%s' нет декларативной схемы (чистая база).", source)
 
     mark_source_initialized(source)
 
