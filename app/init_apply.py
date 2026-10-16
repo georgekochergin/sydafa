@@ -67,7 +67,7 @@ def _save_state_data(data: dict[str, Any]) -> None:
 
 
 def is_source_initialized(source: str) -> bool:
-    """Проверяет, был ли уже выполнен начальный сид для конкретного источника."""
+    """Проверяет, была ли уже выполнена первичная инициализация для конкретного источника."""
     data = _load_state_data()
     applied_sources = data.get("applied_sources", {})
     if isinstance(applied_sources, dict):
@@ -97,7 +97,7 @@ def get_init_timestamp() -> str | None:
 
 
 def mark_source_initialized(source: str) -> None:
-    """Фиксирует факт применения начального сида для источника."""
+    """Фиксирует факт применения первичной инициализации для источника."""
     data = _load_state_data()
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     applied_sources = data.setdefault("applied_sources", {})
@@ -108,7 +108,7 @@ def mark_source_initialized(source: str) -> None:
     data["applied"] = True
     data["applied_at"] = now_iso
     _save_state_data(data)
-    logger.info("Зафиксирован сид для источника '%s' (applied_at=%s)", source, now_iso)
+    logger.info("Зафиксирована первичная инициализация для источника '%s' (applied_at=%s)", source, now_iso)
 
 
 def reset_source_init(source: str) -> None:
@@ -296,8 +296,7 @@ def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecO
 
         operations.append(
             CreateTableOp(
-                schema=s_name,
-                name=t_name,
+                table_fqn=f"{s_name}.{t_name}",
                 primary_key=pk,
                 columns=col_specs,
                 foreign_keys=fks_list,
@@ -311,10 +310,10 @@ def apply_init_for_source(source: str) -> None:
     """Применяет DDL схемы и правила из sources.json для указанного источника.
     
     Если источник уже был инициализирован ранее, повторный накат пропускается.
-    Автозаливка данных (init_data) исключена: создаются чистые таблицы и правила.
+    Создаются чистые таблицы и регистрируются правила генерации.
     """
     if is_source_initialized(source):
-        logger.info("Источник '%s' уже инициализирован ранее. Повторный сид операций игнорируется.", source)
+        logger.info("Источник '%s' уже инициализирован ранее. Повторная инициализация операций игнорируется.", source)
         return
 
     init_sources = load_manifest_sources()
@@ -355,7 +354,7 @@ def apply_init_for_source(source: str) -> None:
         if raw_ops:
             adapter = TypeAdapter(list[ExecOperation])
             parsed_ops = adapter.validate_python(raw_ops)
-            # Исключаем append операции для соблюдения принципа чистой схемы без init_data
+            # Исключаем append операции для соблюдения принципа чистой схемы
             filtered_ops = [op for op in parsed_ops if getattr(op, "op", "") != "append"]
             if filtered_ops:
                 logger.info("Манифест sources.json: выполнение %d legacy DDL операций для '%s'...", len(filtered_ops), source)
@@ -384,34 +383,34 @@ def seed_all_sources_on_first_startup() -> None:
         logger.info("Манифест sources.json пуст или не содержит источников.")
         return
 
-    sources_to_seed = [s for s in init_sources.keys() if not is_source_initialized(s)]
-    if not sources_to_seed:
+    sources_to_init = [s for s in init_sources.keys() if not is_source_initialized(s)]
+    if not sources_to_init:
         logger.info(
-            "Все источники из sources.json уже были инициализированы ранее. Пропуск сидинга (RAM=0 MB)."
+            "Все источники из sources.json уже были инициализированы ранее. Пропуск первичной инициализации (RAM=0 MB)."
         )
         return
 
     logger.info(
-        "Обнаружено %d неинициализированных источников для сидинга: %s",
-        len(sources_to_seed),
-        sources_to_seed,
+        "Обнаружено %d неинициализированных источников для развертывания: %s",
+        len(sources_to_init),
+        sources_to_init,
     )
 
     from . import container_manager
 
-    for src_name in sources_to_seed:
-        logger.info(">>> Первичный сид источника '%s': запуск СУБД и применение схемы/данных...", src_name)
+    for src_name in sources_to_init:
+        logger.info(">>> Первичная инициализация источника '%s': запуск СУБД и развертывание схемы/правил...", src_name)
         try:
             container_manager.wake_up(src_name, ttl_minutes=DEFAULT_TTL_MINUTES)
         except Exception as e:
             logger.critical("Сбой при первичной инициализации источника '%s': %s", src_name, e, exc_info=True)
             raise
 
-        logger.info("Наполнение источника '%s' завершено. Немедленная остановка контейнера для освобождения RAM...", src_name)
+        logger.info("Развертывание источника '%s' завершено. Немедленная остановка контейнера для освобождения RAM...", src_name)
         try:
             container_manager.deactivate(src_name)
         except Exception as e:
-            logger.warning("Не удалось остановить контейнер источника '%s' после сидинга: %s", src_name, e)
+            logger.warning("Не удалось остановить контейнер источника '%s' после инициализации: %s", src_name, e)
 
         logger.info("Контейнер источника '%s' успешно остановлен.", src_name)
         mark_source_initialized(src_name)
@@ -422,7 +421,7 @@ def seed_all_sources_on_first_startup() -> None:
 
 
 def reinit_source(source_name: str) -> dict[str, Any]:
-    """Выполняет полный точечный сброс и повторный Genesis Seed для указанного источника.
+    """Выполняет полный точечный сброс и повторную инициализацию для указанного источника.
     
     1. Останавливает и удаляет контейнер СУБД источника и его именованный том данных.
     2. Очищает live_schema, source_status и запись в applied_sources.
@@ -443,7 +442,7 @@ def reinit_source(source_name: str) -> dict[str, Any]:
     # 3. Перечитывание реестра источников на случай обновления sources.json
     sources.load_sources()
 
-    # 4. Выполнение первичного сида
+    # 4. Выполнение первичной инициализации
     manifest = load_manifest_sources()
     src_spec = manifest.get(source_name, {})
     raw_ops = src_spec.get("operations", []) if isinstance(src_spec, dict) else []

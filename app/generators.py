@@ -551,7 +551,7 @@ def _archive_rows(
 
 
 def update_rows_conn(
-    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any], batch_id: int = 1, random_rows: int | None = None
+    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any], batch_id: int = 1, limit: int | None = None
 ) -> int:
     table = _find_table(live, schema, table_name)
     qualified = qualify_table(table.schema_, table.name, dialect)
@@ -570,8 +570,8 @@ def update_rows_conn(
     cur = conn.cursor()
     upd_name = f"_upd_{table.name}"
 
-    if random_rows is not None and dialect == "mssql":
-        top_n = int(random_rows)
+    if limit is not None and dialect == "mssql":
+        top_n = int(limit)
         where, where_params = _build_where(table, conditions, dialect)
         if f"{table.schema_}.{upd_name}" in live.tables:
             archive_cols = [c.name for c in table.columns if c.name != EXEC_BATCH_ID_COLUMN]
@@ -596,8 +596,8 @@ def update_rows_conn(
         cur.execute(sql, all_params)
         return cur.rowcount if cur.rowcount != -1 else top_n
 
-    if random_rows is not None and dialect == "oracle":
-        top_n = int(random_rows)
+    if limit is not None and dialect == "oracle":
+        top_n = int(limit)
         where, where_params = _build_where(table, conditions, dialect)
         rowid_sql = f"SELECT ROWID FROM {qualified} WHERE {where} ORDER BY dbms_random.value FETCH FIRST :{len(where_params) + 1} ROWS ONLY"
         cur.execute(rowid_sql, where_params + [top_n])
@@ -643,18 +643,18 @@ def update_rows_conn(
 
 
 def update_rows(
-    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any], random_rows: int | None = None
+    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], set_values: dict[str, Any], limit: int | None = None
 ) -> int:
     cfg = get_source(source)
     from .db_connectors import get_connection
     with get_connection(source) as conn:
-        updated = update_rows_conn(conn, cfg.type, live, schema, table_name, conditions, set_values, random_rows=random_rows)
+        updated = update_rows_conn(conn, cfg.type, live, schema, table_name, conditions, set_values, limit=limit)
         conn.commit()
         return updated
 
 
 def delete_rows_conn(
-    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool, batch_id: int = 1, random_rows: int | None = None
+    conn: Any, dialect: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool, batch_id: int = 1, limit: int | None = None
 ) -> int:
     table = _find_table(live, schema, table_name)
     qualified = qualify_table(table.schema_, table.name, dialect)
@@ -666,8 +666,8 @@ def delete_rows_conn(
     cur = conn.cursor()
     del_name = f"_del_{table.name}"
 
-    if random_rows is not None and dialect == "mssql":
-        top_n = int(random_rows)
+    if limit is not None and dialect == "mssql":
+        top_n = int(limit)
         where, where_params = _build_where(table, conditions, dialect)
         if dependents:
             if not cascade:
@@ -730,8 +730,8 @@ def delete_rows_conn(
         cur.execute(sql, all_params)
         return cur.rowcount if cur.rowcount != -1 else top_n
 
-    if random_rows is not None and dialect == "oracle":
-        top_n = int(random_rows)
+    if limit is not None and dialect == "oracle":
+        top_n = int(limit)
         where, where_params = _build_where(table, conditions, dialect)
         rowid_sql = f"SELECT ROWID FROM {qualified} WHERE {where} ORDER BY dbms_random.value FETCH FIRST :{len(where_params) + 1} ROWS ONLY"
         cur.execute(rowid_sql, where_params + [top_n])
@@ -803,12 +803,12 @@ def delete_rows_conn(
 
 
 def delete_rows(
-    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool, random_rows: int | None = None
+    source: str, live: LiveSchema, schema: str, table_name: str, conditions: list[Condition], cascade: bool, limit: int | None = None
 ) -> int:
     cfg = get_source(source)
     from .db_connectors import get_connection
     with get_connection(source) as conn:
-        deleted = delete_rows_conn(conn, cfg.type, live, schema, table_name, conditions, cascade, random_rows=random_rows)
+        deleted = delete_rows_conn(conn, cfg.type, live, schema, table_name, conditions, cascade, limit=limit)
         conn.commit()
         return deleted
 

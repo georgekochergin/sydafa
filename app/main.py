@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
         init_apply.seed_all_sources_on_first_startup()
         _is_ready = True
         logger.info(
-            "sydafa готова (первичный сид завершен, СУБД остановлены в простое, initialized_at=%s): %s",
+            "sydafa готова (первичная инициализация завершена, СУБД остановлены в простое, initialized_at=%s): %s",
             init_apply.get_init_timestamp(),
             sources.source_names(),
         )
@@ -79,7 +79,7 @@ def healthcheck(response: Response):
     from . import init_apply
     if not _is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "initializing", "detail": "Инициализация сервиса и первичный сид источников..."}
+        return {"status": "initializing", "detail": "Инициализация сервиса и первичное развертывание источников..."}
     return {
         "status": "ok",
         "database": SYDAFA_DB,
@@ -175,7 +175,7 @@ def deactivate_source(source: str):
 
 @app.post("/sources/{source}/reinit", response_model=SourceReinitResult)
 def reinit_source_endpoint(source: str):
-    """Сбрасывает контейнер, том данных и повторно выполняет начальный сид из sources.json."""
+    """Сбрасывает контейнер, том данных и повторно выполняет начальное развертывание из sources.json."""
     _assert_source(source)
     try:
         from . import init_apply
@@ -189,7 +189,6 @@ def reinit_source_endpoint(source: str):
 # ==================== DATA & SCHEMA MIGRATION API (Транзакционный DDL + DML) ====================
 
 @app.post("/sources/{source}/migrate", response_model=MigrateResult)
-@app.post("/sources/{source}/exec", response_model=MigrateResult, include_in_schema=False)
 def migrate_source(source: str, req: MigrateRequest, request: Request):
     """Выполняет упорядоченный батч операций DDL и DML в единой All-or-Nothing транзакции."""
     _assert_source(source)

@@ -8,24 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .constants import STATE_DIR
-from .models import TableRuleProfile
+from .models import TableRuleProfile, validate_table_fqn
 
 logger = logging.getLogger("sydafa.rules_state")
 
-_TABLE_FQN_REGEX = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
-
 _rules_cache: dict[str, dict[str, TableRuleProfile]] = {}
-
-
-def validate_table_fqn(table_fqn: str) -> tuple[str, str]:
-    """Проверяет формат schema.table и возвращает (schema, table)."""
-    match = _TABLE_FQN_REGEX.match(table_fqn.strip())
-    if not match:
-        raise ValueError(
-            f"Некорректный идентификатор таблицы '{table_fqn}'. Ожидается формат 'schema.table', "
-            "где имена схемы и таблицы содержат только латиницу, цифры и символ '_'"
-        )
-    return match.group(1), match.group(2)
 
 
 def _rules_file(source: str) -> Path:

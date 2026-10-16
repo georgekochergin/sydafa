@@ -78,7 +78,7 @@ class TestRulesAndMigrate(unittest.TestCase):
         req = MigrateRequest(
             operations=[
                 {"op": "create_schema", "name": "test"},
-                {"op": "truncate", "schema": "test", "table": "users"},
+                {"op": "truncate", "table_fqn": "test.users"},
             ]
         )
         self.assertEqual(len(req.operations), 2)
