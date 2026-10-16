@@ -69,8 +69,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "truncate",
-                        "schema": op.schema_,
-                        "table": op.table,
+                        "table_fqn": op.table_fqn,
                     })
 
                 elif isinstance(op, AppendOp):
@@ -80,18 +79,17 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "append",
-                        "schema": op.schema_,
-                        "table": op.table,
+                        "table_fqn": op.table_fqn,
                         "inserted": inserted,
                     })
 
                 elif isinstance(op, UpdateOp):
                     updated = update_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, random_rows=op.effective_limit
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, limit=op.limit
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
                     from . import rules_state
-                    table_fqn = f"{op.schema_}.{op.table}"
+                    table_fqn = op.table_fqn
                     profile = rules_state.get_table_rules(source_name, table_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
@@ -102,18 +100,17 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "update",
-                        "schema": op.schema_,
-                        "table": op.table,
+                        "table_fqn": op.table_fqn,
                         "updated": updated,
                     })
 
                 elif isinstance(op, DeleteOp):
                     deleted = delete_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, random_rows=op.effective_limit
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, limit=op.limit
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
                     from . import rules_state
-                    table_fqn = f"{op.schema_}.{op.table}"
+                    table_fqn = op.table_fqn
                     profile = rules_state.get_table_rules(source_name, table_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
@@ -124,8 +121,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     applied_records.append({
                         "step": step_idx,
                         "op": "delete",
-                        "schema": op.schema_,
-                        "table": op.table,
+                        "table_fqn": op.table_fqn,
                         "deleted": deleted,
                     })
 
@@ -135,11 +131,14 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     cur = conn.cursor()
                     for stmt in statements:
                         cur.execute(stmt)
-                    applied_records.append({
+                    record = {
                         "step": step_idx,
                         "op": op_name,
                         "description": desc,
-                    })
+                    }
+                    if hasattr(op, "table_fqn"):
+                        record["table_fqn"] = op.table_fqn
+                    applied_records.append(record)
 
             # Фиксация транзакции в БД
             conn.commit()

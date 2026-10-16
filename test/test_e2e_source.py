@@ -138,8 +138,7 @@ def run_source_e2e(base_url: str, source: str):
         {"op": "create_schema", "name": schema_name},
         {
             "op": "create_table",
-            "schema": schema_name,
-            "name": "categories",
+            "table_fqn": f"{schema_name}.categories",
             "primary_key": ["cat_id"],
             "columns": [
                 {"name": "cat_id", "type": "bigint", "generator": {"kind": "sequence"}},
@@ -149,8 +148,7 @@ def run_source_e2e(base_url: str, source: str):
         },
         {
             "op": "create_table",
-            "schema": schema_name,
-            "name": "items",
+            "table_fqn": f"{schema_name}.items",
             "primary_key": ["item_id"],
             "columns": [
                 {"name": "item_id", "type": "bigint", "generator": {"kind": "sequence"}},
@@ -182,8 +180,8 @@ def run_source_e2e(base_url: str, source: str):
 
     # 4. DML: Наполнение данными (append) с FK связями
     append_ops = [
-        {"op": "append", "schema": schema_name, "table": "categories", "rows": 3, "new_key_ratio": 0.0},
-        {"op": "append", "schema": schema_name, "table": "items", "rows": 5, "new_key_ratio": 0.0},
+        {"op": "append", "table_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
+        {"op": "append", "table_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
@@ -192,8 +190,7 @@ def run_source_e2e(base_url: str, source: str):
     update_ops = [
         {
             "op": "update",
-            "schema": schema_name,
-            "table": "categories",
+            "table_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "cat_id", "operator": "=", "value": 1}],
             "set": {"cat_name": "PremiumCategory"},
         }
@@ -218,8 +215,7 @@ def run_source_e2e(base_url: str, source: str):
     delete_ops = [
         {
             "op": "delete",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "predicate": [{"column": "item_id", "operator": "=", "value": 1}],
             "cascade": False,
         }
@@ -239,26 +235,24 @@ def run_source_e2e(base_url: str, source: str):
         except ValueError:
             check(f"{source}: _del snapshot has _exec_batch_id > 0", False, True)
 
-    # 6.2. DML: Update N random rows (с опцией random_rows без предиката)
+    # 6.2. DML: Update N random rows (с опцией limit без предиката)
     random_update_ops = [
         {
             "op": "update",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "set": {"title": "RandomlyUpdated"},
-            "random_rows": 2,
+            "limit": 2,
         }
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_update_ops})
     check(f"{source}: exec random_rows update", code, 200)
 
-    # 6.3. DML: Delete N random rows (с опцией random_rows без предиката)
+    # 6.3. DML: Delete N random rows (с опцией limit без предиката)
     random_delete_ops = [
         {
             "op": "delete",
-            "schema": schema_name,
-            "table": "items",
-            "random_rows": 2,
+            "table_fqn": f"{schema_name}.items",
+            "limit": 2,
         }
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": random_delete_ops})
@@ -267,7 +261,7 @@ def run_source_e2e(base_url: str, source: str):
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409
     bad_trunc = [
-        {"op": "truncate", "schema": schema_name, "table": "categories", "cascade": False}
+        {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": False}
     ]
     code, _ = http("POST", f"{base_url}/sources/{source}/exec", {"operations": bad_trunc})
     check(f"{source}: truncate parent without cascade -> 409", code, 409)
@@ -276,8 +270,7 @@ def run_source_e2e(base_url: str, source: str):
     bad_col_update = [
         {
             "op": "update",
-            "schema": schema_name,
-            "table": "categories",
+            "table_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "unknown_col", "operator": "=", "value": 1}],
             "set": {"cat_name": "test"},
         }
@@ -289,8 +282,7 @@ def run_source_e2e(base_url: str, source: str):
     bad_op_update = [
         {
             "op": "update",
-            "schema": schema_name,
-            "table": "categories",
+            "table_fqn": f"{schema_name}.categories",
             "predicate": [{"column": "cat_id", "operator": "ILIKE", "value": "1"}],
             "set": {"cat_name": "test"},
         }
@@ -302,14 +294,12 @@ def run_source_e2e(base_url: str, source: str):
     complex_evolve = [
         {
             "op": "add_column",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "column": {"name": "rating", "type": "decimal(3,1)"},
         },
         {
             "op": "rename_column",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "from_name": "rating",
             "to_name": "score",
         },
@@ -333,14 +323,12 @@ def run_source_e2e(base_url: str, source: str):
     failing_batch = [
         {
             "op": "add_column",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "column": {"name": "temp_probe", "type": "string"},
         },
         {
             "op": "add_column",
-            "schema": schema_name,
-            "table": "items",
+            "table_fqn": f"{schema_name}.items",
             "column": {"name": "invalid name with spaces", "type": "string"},
         },
     ]
@@ -356,7 +344,7 @@ def run_source_e2e(base_url: str, source: str):
 
     # 10. Truncate каскадно (успешная очистка)
     clean_trunc = [
-        {"op": "truncate", "schema": schema_name, "table": "categories", "cascade": True}
+        {"op": "truncate", "table_fqn": f"{schema_name}.categories", "cascade": True}
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/exec", {"operations": clean_trunc})
     check(f"{source}: truncate with cascade -> 200", code, 200)

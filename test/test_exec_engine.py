@@ -53,8 +53,7 @@ def _build_live_with_audit() -> LiveSchema:
     _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", live, 0)
     _build_ddl_and_update_state(
         CreateTableOp(
-            schema="demo",
-            name="customers",
+            table_fqn="demo.customers",
             primary_key=["customer_id"],
             columns=[
                 ColumnSpec(name="customer_id", type="bigint"),
@@ -75,25 +74,24 @@ class TestExecModels(unittest.TestCase):
             {"op": "create_schema", "name": "demo"},
             {
                 "op": "create_table",
-                "schema": "demo",
-                "name": "customers",
+                "table_fqn": "demo.customers",
                 "primary_key": ["id"],
                 "columns": [{"name": "id", "type": "bigint"}],
             },
-            {"op": "truncate", "schema": "demo", "table": "customers"},
-            {"op": "append", "schema": "demo", "table": "customers", "rows": 5},
+            {"op": "truncate", "table_fqn": "demo.customers"},
+            {"op": "append", "table_fqn": "demo.customers", "rows": 5},
             {
                 "op": "update",
-                "schema": "demo",
-                "table": "customers",
+                "table_fqn": "demo.customers",
                 "predicate": [{"column": "id", "operator": "=", "value": 1}],
                 "set": {"name": "test"},
+                "limit": 5,
             },
             {
                 "op": "delete",
-                "schema": "demo",
-                "table": "customers",
+                "table_fqn": "demo.customers",
                 "predicate": [{"column": "id", "operator": "=", "value": 1}],
+                "limit": 5,
             },
         ]
         ops = adapter.validate_python(raw_ops)
@@ -104,52 +102,27 @@ class TestExecModels(unittest.TestCase):
         self.assertIsInstance(ops[3], AppendOp)
         self.assertIsInstance(ops[4], UpdateOp)
         self.assertIsInstance(ops[5], DeleteOp)
+        self.assertEqual(ops[1].table_fqn, "demo.customers")
+        self.assertEqual(ops[1].schema_, "demo")
+        self.assertEqual(ops[1].table, "customers")
+        self.assertEqual(ops[4].limit, 5)
+        self.assertEqual(ops[5].limit, 5)
 
         req = ExecRequest(operations=ops)
         self.assertEqual(len(req.operations), 6)
 
-    def test_parse_random_rows_in_ops(self):
-        adapter = TypeAdapter(list[ExecOperation])
-        raw_ops = [
-            {
-                "op": "update",
-                "schema": "demo",
-                "table": "customers",
-                "set": {"name": "RandomName"},
-                "random_rows": 10,
-            },
-            {
-                "op": "delete",
-                "schema": "demo",
-                "table": "customers",
-                "random_rows": 5,
-            },
-        ]
-        ops = adapter.validate_python(raw_ops)
-        self.assertEqual(len(ops), 2)
-        self.assertIsInstance(ops[0], UpdateOp)
-        self.assertIsInstance(ops[1], DeleteOp)
-        self.assertEqual(ops[0].random_rows, 10)
-        self.assertEqual(ops[0].effective_limit, 10)
-        self.assertEqual(ops[0].predicate, [])
-        self.assertEqual(ops[1].random_rows, 5)
-        self.assertEqual(ops[1].effective_limit, 5)
-        self.assertEqual(ops[1].predicate, [])
-
-    def test_parse_limit_in_ops_and_effective_limit(self):
+    def test_parse_limit_in_ops(self):
         adapter = TypeAdapter(list[ExecOperation])
         raw_ops = [
             {
                 "op": "delete",
-                "schema": "demo",
-                "table": "customers",
+                "table_fqn": "demo.customers",
                 "predicate": [{"column": "amount", "operator": "<=", "value": 0}],
                 "limit": 10,
             },
             {
                 "op": "update",
-                "schema": "demo",
-                "table": "customers",
+                "table_fqn": "demo.customers",
                 "predicate": [{"column": "status", "operator": "=", "value": "INACTIVE"}],
                 "set": {"status": "ARCHIVED"},
                 "limit": 5,
@@ -158,11 +131,10 @@ class TestExecModels(unittest.TestCase):
         ops = adapter.validate_python(raw_ops)
         self.assertEqual(len(ops), 2)
         self.assertEqual(ops[0].limit, 10)
-        self.assertEqual(ops[0].effective_limit, 10)
         self.assertEqual(len(ops[0].predicate), 1)
         self.assertEqual(ops[0].predicate[0].column, "amount")
         self.assertEqual(ops[1].limit, 5)
-        self.assertEqual(ops[1].effective_limit, 5)
+        self.assertEqual(ops[1].set, {"status": "ARCHIVED"})
 
 
 class TestBatchIdAudit(unittest.TestCase):
@@ -233,8 +205,7 @@ class TestBatchIdAudit(unittest.TestCase):
         live = LiveSchema(schemas=["demo"], tables={})
         # 1. create_table
         create_op = CreateTableOp(
-            schema="demo",
-            name="contracts",
+            table_fqn="demo.contracts",
             primary_key=["id"],
             columns=[
                 ColumnSpec(name="id", type="bigint", generator={"kind": "sequence"}),
@@ -249,8 +220,7 @@ class TestBatchIdAudit(unittest.TestCase):
         # 2. add_column (DDL после создания)
         from app.models import AddColumnOp
         add_col_op = AddColumnOp(
-            schema="demo",
-            table="contracts",
+            table_fqn="demo.contracts",
             column=ColumnSpec(name="status", type="string", generator={"kind": "choice", "values": ["NEW"]}),
         )
         stmts2, _ = _build_ddl_and_update_state(add_col_op, "mssql", live, 1)
@@ -277,8 +247,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка PK-независимого UPDATE и DELETE в MSSQL (Updatable CTE + OUTPUT INTO)."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            schema="demo",
-            name="logs",
+            table_fqn="demo.logs",
             primary_key=[],  # Таблица БЕЗ первичного ключа
             columns=[
                 ColumnSpec(name="message", type="string", generator={"kind": "faker", "provider": "sentence"}),
@@ -301,7 +270,7 @@ class TestBatchIdAudit(unittest.TestCase):
             conditions=[],  # Без предиката: обновляем 10 случайных строк таблицы
             set_values={"level": "WARN"},
             batch_id=11,
-            random_rows=10,
+            limit=10,
         )
         self.assertEqual(updated, 10)
         self.assertEqual(len(conn.cur.executed), 1)
@@ -324,7 +293,7 @@ class TestBatchIdAudit(unittest.TestCase):
             conditions=[],
             cascade=False,
             batch_id=12,
-            random_rows=5,
+            limit=5,
         )
         self.assertEqual(deleted, 5)
         self.assertEqual(len(conn_del.cur.executed), 1)
@@ -339,8 +308,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка PK-независимого UPDATE и DELETE в Oracle через системный ROWID."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            schema="demo",
-            name="logs",
+            table_fqn="demo.logs",
             primary_key=[],  # Таблица БЕЗ первичного ключа
             columns=[
                 ColumnSpec(name="message", type="string", generator={"kind": "faker", "provider": "sentence"}),
@@ -363,7 +331,7 @@ class TestBatchIdAudit(unittest.TestCase):
             conditions=[Condition(column="level", operator="=", value="ERROR")],
             set_values={"level": "RESOLVED"},
             batch_id=21,
-            random_rows=2,
+            limit=2,
         )
         self.assertEqual(updated, 2)
         self.assertEqual(len(conn.cur.executed), 3)
@@ -398,7 +366,7 @@ class TestBatchIdAudit(unittest.TestCase):
             conditions=[],  # Без предиката
             cascade=False,
             batch_id=22,
-            random_rows=2,
+            limit=2,
         )
         self.assertEqual(deleted, 2)
         self.assertEqual(len(conn_del.cur.executed), 3)
@@ -423,8 +391,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка Oracle, когда строк 0 — операция завершается без вызова архива и мутации."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            schema="demo",
-            name="empty_tbl",
+            table_fqn="demo.empty_tbl",
             primary_key=[],
             columns=[ColumnSpec(name="v", type="bigint")],
         )
@@ -432,13 +399,13 @@ class TestBatchIdAudit(unittest.TestCase):
         conn = FakeConn()
         conn.cur._rows = []  # Ничего не найдено
 
-        updated = update_rows_conn(conn, "oracle", live, "demo", "empty_tbl", conditions=[], set_values={"v": 1}, random_rows=5)
+        updated = update_rows_conn(conn, "oracle", live, "demo", "empty_tbl", conditions=[], set_values={"v": 1}, limit=5)
         self.assertEqual(updated, 0)
         self.assertEqual(len(conn.cur.executed), 1)  # Только запрос ROWID
 
         conn_del = FakeConn()
         conn_del.cur._rows = []
-        deleted = delete_rows_conn(conn_del, "oracle", live, "demo", "empty_tbl", conditions=[], cascade=False, random_rows=5)
+        deleted = delete_rows_conn(conn_del, "oracle", live, "demo", "empty_tbl", conditions=[], cascade=False, limit=5)
         self.assertEqual(deleted, 0)
         self.assertEqual(len(conn_del.cur.executed), 1)  # Только запрос ROWID
 

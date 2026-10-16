@@ -105,12 +105,24 @@ BATCH_ID_COLUMN = "_batch_id"
 EXEC_BATCH_ID_COLUMN = "_exec_batch_id"
 
 _IDENT_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TABLE_FQN_REGEX = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
 
 
 def validate_identifier(v: str) -> str:
     if not _IDENT_REGEX.match(v):
         raise ValueError(f"Идентификатор '{v}' содержит недопустимые символы. Разрешены только латиница, цифры и '_'.")
     return v
+
+
+def validate_table_fqn(table_fqn: str) -> tuple[str, str]:
+    """Проверяет формат schema.table и возвращает (schema, table)."""
+    match = _TABLE_FQN_REGEX.match(table_fqn.strip())
+    if not match:
+        raise ValueError(
+            f"Некорректный идентификатор таблицы '{table_fqn}'. Ожидается формат 'schema.table', "
+            "где имена схемы и таблицы содержат только латиницу, цифры и символ '_'"
+        )
+    return match.group(1), match.group(2)
 
 
 class ColumnSpec(BaseModel):
@@ -261,99 +273,94 @@ class RenameSchemaOp(BaseModel):
         return validate_identifier(v)
 
 
-class CreateTableOp(BaseModel):
+class TableFqnOpMixin(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    table_fqn: str = Field(description="FQN таблицы в формате 'schema.table'")
+
+    @field_validator("table_fqn")
+    @classmethod
+    def check_table_fqn(cls, v: str) -> str:
+        validate_table_fqn(v)
+        return v.strip()
+
+    @property
+    def schema_(self) -> str:
+        return self.table_fqn.split(".")[0].strip()
+
+    @property
+    def table(self) -> str:
+        return self.table_fqn.split(".")[1].strip()
+
+
+class CreateTableOp(TableFqnOpMixin):
     op: Literal["create_table"] = "create_table"
-    schema_: str = Field(alias="schema")
-    name: str
     primary_key: list[str]
     columns: list[ColumnSpec]
     foreign_keys: list[ForeignKey] = Field(default_factory=list)
 
-    @field_validator("schema_", "name")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
+    @property
+    def name(self) -> str:
+        return self.table
 
 
-class DropTableOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class DropTableOp(TableFqnOpMixin):
     op: Literal["drop_table"] = "drop_table"
-    schema_: str = Field(alias="schema")
-    name: str
 
-    @field_validator("schema_", "name")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
+    @property
+    def name(self) -> str:
+        return self.table
 
 
-class RenameTableOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class RenameTableOp(TableFqnOpMixin):
     op: Literal["rename_table"] = "rename_table"
-    schema_: str = Field(alias="schema")
-    from_name: str
     to_name: str
 
-    @field_validator("schema_", "from_name", "to_name")
+    @property
+    def from_name(self) -> str:
+        return self.table
+
+    @field_validator("to_name")
     @classmethod
-    def check_names(cls, v: str) -> str:
+    def check_to_name(cls, v: str) -> str:
         return validate_identifier(v)
 
 
-class TransferTableOp(BaseModel):
+class TransferTableOp(TableFqnOpMixin):
     op: Literal["transfer_table"] = "transfer_table"
-    table: str
-    from_schema: str
     to_schema: str
 
-    @field_validator("table", "from_schema", "to_schema")
+    @property
+    def from_schema(self) -> str:
+        return self.schema_
+
+    @field_validator("to_schema")
     @classmethod
-    def check_names(cls, v: str) -> str:
+    def check_to_schema(cls, v: str) -> str:
         return validate_identifier(v)
 
 
-class AddColumnOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class AddColumnOp(TableFqnOpMixin):
     op: Literal["add_column"] = "add_column"
-    schema_: str = Field(alias="schema")
-    table: str
     column: ColumnSpec
 
-    @field_validator("schema_", "table")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
 
-
-class DropColumnOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class DropColumnOp(TableFqnOpMixin):
     op: Literal["drop_column"] = "drop_column"
-    schema_: str = Field(alias="schema")
-    table: str
     name: str
 
-    @field_validator("schema_", "table", "name")
+    @field_validator("name")
     @classmethod
-    def check_names(cls, v: str) -> str:
+    def check_name(cls, v: str) -> str:
         return validate_identifier(v)
 
 
-class RenameColumnOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class RenameColumnOp(TableFqnOpMixin):
     op: Literal["rename_column"] = "rename_column"
-    schema_: str = Field(alias="schema")
-    table: str
     from_name: str
     to_name: str
 
-    @field_validator("schema_", "table", "from_name", "to_name")
+    @field_validator("from_name", "to_name")
     @classmethod
     def check_names(cls, v: str) -> str:
         return validate_identifier(v)
@@ -394,75 +401,29 @@ class Condition(BaseModel):
     value: Any
 
 
-class TruncateOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class TruncateOp(TableFqnOpMixin):
     op: Literal["truncate"] = "truncate"
-    schema_: str = Field(alias="schema")
-    table: str
     cascade: bool = False
 
-    @field_validator("schema_", "table")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
 
-
-class AppendOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class AppendOp(TableFqnOpMixin):
     op: Literal["append"] = "append"
-    schema_: str = Field(alias="schema")
-    table: str
     rows: int = Field(default=1, gt=0, le=100_000)
     new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
-    @field_validator("schema_", "table")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
 
-
-class UpdateOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class UpdateOp(TableFqnOpMixin):
     op: Literal["update"] = "update"
-    schema_: str = Field(alias="schema")
-    table: str
     predicate: list[Condition] = Field(default_factory=list)
     set: dict[str, Any]
-    random_rows: int | None = Field(default=None, gt=0)
-    limit: int | None = Field(default=None, gt=0, description="Обновить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
-
-    @property
-    def effective_limit(self) -> int | None:
-        return self.limit if self.limit is not None else self.random_rows
-
-    @field_validator("schema_", "table")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
+    limit: int | None = Field(default=None, gt=0, description="Обновить не более N случайных строк, удовлетворяющих предикату")
 
 
-class DeleteOp(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
+class DeleteOp(TableFqnOpMixin):
     op: Literal["delete"] = "delete"
-    schema_: str = Field(alias="schema")
-    table: str
     predicate: list[Condition] = Field(default_factory=list)
     cascade: bool = False
-    random_rows: int | None = Field(default=None, gt=0)
-    limit: int | None = Field(default=None, gt=0, description="Удалить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
-
-    @property
-    def effective_limit(self) -> int | None:
-        return self.limit if self.limit is not None else self.random_rows
-
-    @field_validator("schema_", "table")
-    @classmethod
-    def check_names(cls, v: str) -> str:
-        return validate_identifier(v)
+    limit: int | None = Field(default=None, gt=0, description="Удалить не более N случайных строк, удовлетворяющих предикату")
 
 
 MigrateOperation = Annotated[
