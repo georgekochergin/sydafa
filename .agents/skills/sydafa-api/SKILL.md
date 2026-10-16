@@ -45,7 +45,11 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 ## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{schema.table}`
 
-Принимает профиль правил генерации `TableRuleProfile`:
+Принимает профиль правил генерации `TableRuleProfile`.
+Опциональный параметр: `?validate_existing=false` (или поле в инварианте).
+- `false` (по умолчанию, мягкий режим): мутации `update`/`delete` свободны (позволяют вносить тестовые аномалии), а последующий `append` автоматически балансирует счет пополнениями.
+- `true` (строгий режим): исторические данные проверяются с ошибкой 422, а мутации `update`/`delete` блокируются Invariant Guard при нарушении баланса.
+
 ```json
 {
   "columns": {
@@ -64,7 +68,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
       "withdrawal_range": [50.0, 2000.0],
       "credit_value": "CREDIT",
       "debit_value": "DEBIT",
-      "signed_amount": true
+      "signed_amount": true,
+      "validate_existing": false
     }
   ]
 }

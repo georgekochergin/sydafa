@@ -103,3 +103,65 @@ def reset_rules_cache(source: str) -> None:
             rf.unlink()
         except Exception:
             pass
+
+
+def validate_table_invariants_on_data(
+    source: str,
+    table_fqn: str,
+    profile: TableRuleProfile,
+    conn: Any = None,
+) -> None:
+    """Проверяет соответствие существующих данных в СУБД правилам инвариантов profile.
+
+    Если обнаружены нарушения, выбрасывает ValueError с подробным описанием нарушений.
+    Если таблица пуста или нарушений нет, завершается успешно.
+    """
+    from .db_connectors import get_connection
+    from .models import CumulativeBalanceInvariant
+    from .render_ddl import qualify_table, quote_ident
+    from .schema_state import get_live_schema
+    from .sources import get_source
+
+    schema_name, table_name = validate_table_fqn(table_fqn)
+    live = get_live_schema(source)
+    if f"{schema_name}.{table_name}" not in live.tables:
+        return
+
+    cfg = get_source(source)
+    dialect = cfg.type
+    qualified = qualify_table(schema_name, table_name, dialect)
+
+    def _check_on_connection(active_conn):
+        cur = active_conn.cursor()
+        for inv in profile.invariants:
+            if isinstance(inv, CumulativeBalanceInvariant):
+                part_cols = ", ".join(quote_ident(c, dialect) for c in inv.partition_by)
+                amt_col = quote_ident(inv.amount_column, dialect)
+                having_clauses = [f"SUM({amt_col}) < {inv.min_balance}"]
+                if inv.max_balance is not None:
+                    having_clauses.append(f"SUM({amt_col}) > {inv.max_balance}")
+                having_str = " OR ".join(having_clauses)
+                sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols} HAVING {having_str}"
+                try:
+                    cur.execute(sql)
+                    violations = cur.fetchall()
+                except Exception as e:
+                    logger.warning("Не удалось выполнить проверочный запрос для '%s': %s", table_fqn, e)
+                    violations = []
+
+                if violations:
+                    sample = violations[0]
+                    part_vals = sample[: len(inv.partition_by)]
+                    sum_val = sample[-1]
+                    max_limit_str = f", max_balance={inv.max_balance}" if inv.max_balance is not None else ""
+                    raise ValueError(
+                        f"Невозможно применить правило cumulative_balance к таблице '{table_fqn}': "
+                        f"для партиции {list(part_vals)} текущий накопленный баланс равен {sum_val}, "
+                        f"что нарушает ограничение min_balance={inv.min_balance}{max_limit_str}"
+                    )
+
+    if conn is not None:
+        _check_on_connection(conn)
+    else:
+        with get_connection(source) as fresh_conn:
+            _check_on_connection(fresh_conn)

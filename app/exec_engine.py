@@ -89,6 +89,16 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     updated = update_rows_conn(
                         conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, random_rows=op.effective_limit
                     )
+                    # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
+                    from . import rules_state
+                    table_fqn = f"{op.schema_}.{op.table}"
+                    profile = rules_state.get_table_rules(source_name, table_fqn)
+                    if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
+                        try:
+                            rules_state.validate_table_invariants_on_data(source_name, table_fqn, profile, conn=conn)
+                        except ValueError as err:
+                            raise ExecError(step_idx, op_name, str(err)) from err
+
                     applied_records.append({
                         "step": step_idx,
                         "op": "update",
@@ -101,6 +111,16 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     deleted = delete_rows_conn(
                         conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, random_rows=op.effective_limit
                     )
+                    # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
+                    from . import rules_state
+                    table_fqn = f"{op.schema_}.{op.table}"
+                    profile = rules_state.get_table_rules(source_name, table_fqn)
+                    if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
+                        try:
+                            rules_state.validate_table_invariants_on_data(source_name, table_fqn, profile, conn=conn)
+                        except ValueError as err:
+                            raise ExecError(step_idx, op_name, str(err)) from err
+
                     applied_records.append({
                         "step": step_idx,
                         "op": "delete",

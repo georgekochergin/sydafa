@@ -228,10 +228,30 @@ def get_table_rule_profile(source: str, table_fqn: str):
 
 
 @app.put("/sources/{source}/rules/{table_fqn:path}", response_model=TableRuleProfile)
-def set_table_rule_profile(source: str, table_fqn: str, profile: TableRuleProfile):
+def set_table_rule_profile(
+    source: str,
+    table_fqn: str,
+    profile: TableRuleProfile,
+    validate_existing: bool = Query(
+        default=False,
+        description="Если True, проверяет соответствие существующих данных в СУБД правилам и падает с 422 при нарушениях. По умолчанию False (мягкий режим).",
+    ),
+    request: Request = None,
+):
     """Устанавливает или перезаписывает профиль правил генерации для таблицы schema.table."""
     _assert_source(source)
     try:
+        if validate_existing:
+            for inv in profile.invariants:
+                if hasattr(inv, "validate_existing"):
+                    inv.validate_existing = True
+            request_host = request.url.hostname if request else None
+            _wake(source, request_host=request_host)
+            rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
+        elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
+            request_host = request.url.hostname if request else None
+            _wake(source, request_host=request_host)
+            rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
         rules_state.set_table_rules(source, table_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
