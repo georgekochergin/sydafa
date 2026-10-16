@@ -130,9 +130,39 @@ class TestExecModels(unittest.TestCase):
         self.assertIsInstance(ops[0], UpdateOp)
         self.assertIsInstance(ops[1], DeleteOp)
         self.assertEqual(ops[0].random_rows, 10)
+        self.assertEqual(ops[0].effective_limit, 10)
         self.assertEqual(ops[0].predicate, [])
         self.assertEqual(ops[1].random_rows, 5)
+        self.assertEqual(ops[1].effective_limit, 5)
         self.assertEqual(ops[1].predicate, [])
+
+    def test_parse_limit_in_ops_and_effective_limit(self):
+        adapter = TypeAdapter(list[ExecOperation])
+        raw_ops = [
+            {
+                "op": "delete",
+                "schema": "demo",
+                "table": "customers",
+                "predicate": [{"column": "amount", "operator": "<=", "value": 0}],
+                "limit": 10,
+            },
+            {
+                "op": "update",
+                "schema": "demo",
+                "table": "customers",
+                "predicate": [{"column": "status", "operator": "=", "value": "INACTIVE"}],
+                "set": {"status": "ARCHIVED"},
+                "limit": 5,
+            },
+        ]
+        ops = adapter.validate_python(raw_ops)
+        self.assertEqual(len(ops), 2)
+        self.assertEqual(ops[0].limit, 10)
+        self.assertEqual(ops[0].effective_limit, 10)
+        self.assertEqual(len(ops[0].predicate), 1)
+        self.assertEqual(ops[0].predicate[0].column, "amount")
+        self.assertEqual(ops[1].limit, 5)
+        self.assertEqual(ops[1].effective_limit, 5)
 
 
 class TestBatchIdAudit(unittest.TestCase):

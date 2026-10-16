@@ -428,6 +428,11 @@ class UpdateOp(BaseModel):
     predicate: list[Condition] = Field(default_factory=list)
     set: dict[str, Any]
     random_rows: int | None = Field(default=None, gt=0)
+    limit: int | None = Field(default=None, gt=0, description="Обновить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
+
+    @property
+    def effective_limit(self) -> int | None:
+        return self.limit if self.limit is not None else self.random_rows
 
     @field_validator("schema_", "table")
     @classmethod
@@ -444,6 +449,11 @@ class DeleteOp(BaseModel):
     predicate: list[Condition] = Field(default_factory=list)
     cascade: bool = False
     random_rows: int | None = Field(default=None, gt=0)
+    limit: int | None = Field(default=None, gt=0, description="Удалить не более N случайных строк, удовлетворяющих предикату (синоним random_rows)")
+
+    @property
+    def effective_limit(self) -> int | None:
+        return self.limit if self.limit is not None else self.random_rows
 
     @field_validator("schema_", "table")
     @classmethod
