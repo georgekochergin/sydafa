@@ -20,7 +20,7 @@ flowchart TD
     subgraph SydafaApp["Сервис sydafa (FastAPI Core)"]
         direction TB
         L1_API["Уровень 1: Orchestration & Lifecycle API<br/>POST /sources, DELETE /sources/{source}<br/>POST /sources/{source}/activate, POST /sources/{source}/deactivate"]
-        L2_API["Уровень 2: Data & Schema API<br/>POST /sources/{source}/exec<br/>GET /sources/{source}, GET /sources/{source}/schema (Safe GET)"]
+        L2_API["Уровень 2: Data, Rules & Migration API<br/>POST /sources/{source}/migrate (алиас /exec)<br/>GET/PUT/DELETE /sources/{source}/rules/{schema.table}<br/>GET /sources/{source}/schema (Safe GET)"]
     end
 
     subgraph StateVolume["Постоянный том состояния (/state)"]
@@ -73,7 +73,7 @@ flowchart TD
 > 
 > По стандарту RFC 7231 методы `GET` (`GET /sources/{source}`, `GET /sources/{source}/schema`, `GET /sources/{source}/status`, `GET /health`) являются **безопасными и идемпотентными**. Они считывают метаданные и структуру исключительно из тома `/state` и памяти сервиса. 
 > 
-> **Вызов GET-запроса никогда не будит контейнер с СУБД и не расходует память хоста.** Для физического запуска контейнера используется строго явный метод `POST /sources/{source}/activate` или `POST /sources/{source}/exec`.
+> **Вызов GET-запроса никогда не будит контейнер с СУБД и не расходует память хоста.** Для физического запуска контейнера используется строго явный метод `POST /sources/{source}/activate` или `POST /sources/{source}/migrate` (алиас `/exec`).
 
 ---
 
@@ -126,9 +126,9 @@ flowchart TD
 
 ---
 
-## 4. Декларативный манифест `sources.json` (Topology & Seed)
+## 4. Декларативный манифест `sources.json` (Topology, Schema & Rules)
 
-Файл `sources.json` монтируется в контейнер sydafa (`/app/config/sources.json:ro`) и является **единственным источником правды** для топологии баз, внешних портов и начального наполнения:
+Файл `sources.json` монтируется в контейнер sydafa (`/app/config/sources.json:ro`) и является **единственным источником правды** для топологии баз, внешних портов, декларативной структуры таблиц и правил генерации данных:
 
 ```json
 {
@@ -136,25 +136,50 @@ flowchart TD
     "billing": {
       "type": "mssql",
       "external_port": 14330,
-      "operations": [
-        {"op": "create_schema", "name": "demo"},
-        {
-          "op": "create_table",
-          "schema": "demo",
-          "name": "customers",
-          "primary_key": ["customer_id"],
-          "columns": [
-            {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
-            {"name": "name", "type": "string", "generator": {"kind": "faker", "provider": "company"}}
-          ]
-        },
-        {"op": "append", "schema": "demo", "table": "customers", "rows": 100}
-      ]
+      "schema": {
+        "tables": {
+          "demo.customers": {
+            "primary_key": [
+              "customer_id"
+            ],
+            "columns": {
+              "customer_id": "bigint",
+              "name": "string",
+              "segment": "string"
+            },
+            "foreign_keys": []
+          }
+        }
+      },
+      "rules": {
+        "demo.customers": {
+          "columns": {
+            "customer_id": {
+              "kind": "sequence"
+            },
+            "name": {
+              "kind": "faker",
+              "provider": "company"
+            },
+            "segment": {
+              "kind": "choice",
+              "values": [
+                "Retail",
+                "Corporate",
+                "VIP"
+              ]
+            }
+          }
+        }
+      }
     },
     "crm": {
       "type": "oracle",
       "external_port": 15211,
-      "operations": []
+      "schema": {
+        "tables": {}
+      },
+      "rules": {}
     }
   }
 }
@@ -163,11 +188,11 @@ flowchart TD
 ### Семантика манифеста и жизненного цикла
 1. **Статичная топология и внешние порты**: состав источников и их внешние порты хоста (`external_port`) объявляются декларативно в `sources.json`. Переменные окружения `SYDAFA_EXT_PORT_*` больше не требуются.
 2. **Бесшовная смена внешнего порта**: если вам нужно изменить внешний порт базы на хосте, достаточно изменить `external_port` в `sources.json` и перезапустить sydafa (`docker compose restart sydafa`). При следующей активации sydafa автоматически пересоздаст контейнер СУБД с новым портом на хосте, **полностью сохранив все таблицы и данные в томе данных (`volume`)**.
-3. **По-источниковый Genesis Seed (Additive Seed)**:
-   - При старте sydafa проверяет по-источниковый маркер инициализации в `/state/init_state.json` (`applied_sources`).
-   - Если источник ещё ни разу не инициализировался (первый старт или новый источник, дописанный в `sources.json`), sydafa поднимает его СУБД, применяет DDL/DML из `operations` и **немедленно останавливает СУБД (`docker stop`)**, возвращая 0 MB RAM.
-   - Если источник уже инициализировался ранее, блок `operations` для него **полностью игнорируется**, а контейнер СУБД даже не запускается на старте.
-4. **Добавление нового источника в работающий стенд**: просто допишите новый объект в `sources.json` и выполните `docker compose restart sydafa`. Sydafa поднимет и наполнит только новый источник, не затрагивая уже работающие базы.
+3. **Декларативное разворачивание схем без автозаливки (Clean Schema & Rules)**:
+   - При первом старте неинициализированного источника sydafa поднимает его СУБД, транслирует блок `schema` в DDL-команды создания схем и таблиц с учетом Foreign Keys, регистрирует правила генерации из блока `rules` и **немедленно останавливает СУБД (`docker stop`)**, возвращая 0 MB RAM.
+   - Автозаливка строк при старте исключена (`init_data` не используется): таблицы создаются чистыми, а наполнение данными осуществляется по мере необходимости через API миграций `POST /sources/{source}/migrate`.
+   - Если источник уже инициализировался ранее, контейнер СУБД на старте не запускается.
+4. **Добавление нового источника в работающий стенд**: просто допишите новый объект в `sources.json` и выполните `docker compose restart sydafa`. Sydafa поднимет и инициализирует только новый источник, не затрагивая уже работающие базы.
 5. **Инспекция состояния**: временная метка последнего сида доступна через `GET /health` в поле `initialized_at`.
 6. **Сброс с чистого листа**: чтобы пересоздать базы строго по исходному `sources.json`, выполните:
    ```bash
@@ -231,16 +256,16 @@ flowchart TD
 
 ### 3. Точечная реинициализация источника (`POST /sources/{source}/reinit`)
 
-Когда разработчик меняет состав колонок, таблиц или генераторов в блоке `operations` файла `sources.json` для **конкретного источника** (например, `billing`), нет необходимости перезапускать весь compose-стек или удалять все базы командой `docker compose down -v`:
+Когда разработчик меняет состав колонок, таблиц или правил в блоках `schema` или `rules` файла `sources.json` для **конкретного источника** (например, `billing`), нет необходимости перезапускать весь compose-стек или удалять все базы командой `docker compose down -v`:
 
-1. Отредактируйте `sources.json` (обновите блок `operations` для нужной базы).
+1. Отредактируйте `sources.json` (обновите блок `schema` или `rules` для нужной базы).
 2. Вызовите метод `POST /sources/{source}/reinit` (через Swagger UI или curl).
 3. Sydafa автоматически и изолированно выполнит:
    - Принудительную остановку и удаление контейнера СУБД (`sydafa-src-<type>-<name>`);
    - Удаление именованного тома данных именно этого источника (`sydafa-data-<type>-<name>`);
-   - Очистку live-схемы `/state/live_schema.{source}.json` и сброс статуса;
+   - Очистку live-схемы `/state/live_schema.{source}.json`, реестра правил и сброс статуса;
    - Сброс маркера инициализации в `/state/init_state.json`;
-   - Поднятие чистой СУБД, выполнение всех свежих операций DDL/DML из `sources.json`;
+   - Поднятие чистой СУБД, разворачивание свежей схемы и сохранение правил из `sources.json`;
    - Немедленную остановку контейнера СУБД для освобождения памяти хоста (0 MB RAM).
 4. **Все остальные источники (Oracle, ERP и т.д.) продолжают жить без изменений и простоя**.
 
@@ -251,7 +276,7 @@ flowchart TD
   "source": "billing",
   "applied_at": "2026-10-15T12:00:00Z",
   "operations_executed": 3,
-  "message": "Источник 'billing' успешно зачищен и реинициализирован с 3 операциями."
+  "message": "Источник 'billing' успешно зачищен и реинициализирован со свежей схемой и правилами."
 }
 ```
 
@@ -385,23 +410,33 @@ networks:
 | `GET` | `/sources/{source}/status` | Текущий статус, срок TTL и реквизиты `connection` (безопасный запрос) | — |
 | `POST` | `/sources/{source}/activate` | Физический запуск СУБД в Docker и продление срока жизни | `?ttl_minutes=15` |
 | `POST` | `/sources/{source}/deactivate` | Принудительная остановка базы для освобождения RAM | — |
-| `POST` | `/sources/{source}/reinit` | **Точечная реинициализация источника**: удаление контейнера, тома данных `sydafa-data-...`, очистка live-схемы и повторный накат свежих `operations` из `sources.json`. СУБД останавливается после сида. Остальные базы не затрагиваются. | — |
+| `POST` | `/sources/{source}/reinit` | **Точечная реинициализация источника**: удаление контейнера, тома данных `sydafa-data-...`, очистка live-схемы, реестра правил и повторное разворачивание схемы и правил из `sources.json`. СУБД останавливается после сида. Остальные базы не затрагиваются. | — |
 
-### 3. Данные и схемы (Data & Schema API)
+### 3. Правила генерации данных (Data Generation Rules API)
+| Метод | Путь | Описание | Пример тела |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/sources/{source}/rules` | Список всех зарегистрированных профилей правил генерации для источника | — |
+| `GET` | `/sources/{source}/rules/{schema.table}` | Профиль правил генерации конкретной таблицы (`columns` + `invariants`) | — |
+| `PUT` | `/sources/{source}/rules/{schema.table}` | Установка или полное обновление профиля правил генерации для таблицы | `{"columns": {...}, "invariants": [...]}` |
+| `DELETE` | `/sources/{source}/rules/{schema.table}` | Сброс правил генерации таблицы | — |
+
+### 4. Миграции и схемы (Migration & Schema API)
 | Метод | Путь | Описание | Пример тела |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/health` | Готовность сервиса sydafa к обработке запросов. Возвращает статус готовности (`ok`), список активных источников и временную метку первичного сида `initialized_at` (ISO 8601 UTC). Во время первичного наполнения возвращает 503 (`initializing`). | — |
 | `GET` | `/sources/{source}` | **Метаданные источника и инфраструктура**: тип СУБД, имя БД, логин читателя, объект `connection` и плоский список имен зарегистрированных таблиц (`TableRef {schema, name}`) без детального описания колонок. Безопасный запрос, не будит базу. | — |
-| `GET` | `/sources/{source}/schema` | **Детальная live-схема данных**: полное декларативное описание структуры таблиц, колонок с их типами данных, генераторами значений, первичными и внешними ключами. Безопасный запрос, читает файл `/state/live_schema.{source}.json`. | — |
-| `POST` | `/sources/{source}/exec` | Единый транзакционный метод применения изменений структуры (DDL: схемы, таблицы, колонки, трансфер) и данных (DML: append, update, delete, truncate) в режиме All-or-Nothing. Будит базу при необходимости. | `{"operations": [...]}` |
+| `GET` | `/sources/{source}/schema` | **Детальная live-схема данных**: полное декларативное описание структуры таблиц, колонок с их типами данных, первичными и внешними ключами. Безопасный запрос, читает файл `/state/live_schema.{source}.json`. | — |
+| `POST` | `/sources/{source}/migrate` | **Единый метод миграций**: атомарное применение изменений структуры (DDL: схемы, таблицы, колонки, трансфер) и данных (DML: append, update, delete, truncate) в режиме All-or-Nothing. (Алиас: `POST /sources/{source}/exec`). | `{"operations": [...]}` |
 
 ---
 
-## 9. Единый метод исполнения: `POST /sources/{source}/exec`
+## 9. Единый метод миграций: `POST /sources/{source}/migrate`
 
-В архитектуре **sydafa** управление структурой базы данных (DDL) и генерацией данных (DML) не разбивается на множество разрозненных REST-эндпоинтов (нет необходимости вызывать отдельные HTTP-ручки для добавления колонки, удаления таблицы или вставки строк). 
+В архитектуре **sydafa** управление структурой базы данных (DDL) и мутациями данных (DML) объединено в **единую точку транзакционного управления**: метод `POST /sources/{source}/migrate` (с поддержкой обратной совместимости по пути `POST /sources/{source}/exec`).
 
-Вместо этого используется **единая точка транзакционного управления**: метод `POST /sources/{source}/exec`.
+При этом соблюдается строгий принцип **разделения ответственности (Separation of Concerns)**:
+- **Физическая схема (`TableSchema`, `ColumnSpec`)**: описывает только реляционную модель СУБД (`name`, `type`). Колонки больше не перегружаются логикой генерации.
+- **Бизнес-профили данных (`TableRuleProfile`)**: описывают правила синтетического наполнения (`columns`) и инварианты связности (`invariants`) и управляются через манифест `sources.json` или отдельный эндпоинт `PUT /sources/{source}/rules/{schema.table}`.
 
 ### Преимущества единого метода
 1. **Транзакционность All-or-Nothing**: Все операции из массива `operations` выполняются строго последовательно в рамках **одной транзакции СУБД**. Если любая операция падает (ошибка синтаксиса, нарушение ограничений FK/PK или типа данных), СУБД автоматически выполняет полный `ROLLBACK`, а состояние схемы сервиса восстанавливается до исходного.
@@ -424,9 +459,9 @@ networks:
 
 ---
 
-### Справочник генераторов данных (`generator`)
+### Справочник генераторов данных и инвариантов связности
 
-В объекте колонки поле `generator` определяет синтетическое наполнение при выполнении операции `append`:
+Генераторы колонок задаются в профиле правил таблицы (`TableRuleProfile.columns`) и определяют синтетическое наполнение при выполнении операции `append`:
 
 | `kind` | Дополнительные параметры | Описание и пример |
 | :--- | :--- | :--- |
@@ -439,9 +474,32 @@ networks:
 
 > **Доля NULL-значений (`null_ratio`):** Для любого генератора поддерживается опциональный параметр `null_ratio` от `0.0` до `1.0` (например, `null_ratio: 0.3` = 30% значений генерируются как `NULL`).
 >
-> Если у колонки генератор не указан (`null`), при `append` в нее всегда вставляется значение `NULL`.
+> Если у колонки генератор не указан, движок автоматически генерирует синтетическое значение по ее реляционному типу данных.
 
-#### Пример генерации договоров с датами начала и окончания:
+### Инварианты связности: Неотрицательный остаток (`cumulative_balance`)
+
+Для финансовых таблиц, транзакций и лицевых счетов поддерживается правило накопительного баланса (`TableRuleProfile.invariants`):
+
+```json
+{
+  "kind": "cumulative_balance",
+  "partition_by": ["account_id"],
+  "amount_column": "amount",
+  "type_column": "tx_type",
+  "min_balance": 0.0,
+  "deposit_prob": 0.5,
+  "deposit_range": [100.0, 5000.0],
+  "withdrawal_range": [50.0, 2000.0],
+  "credit_value": "CREDIT",
+  "debit_value": "DEBIT",
+  "signed_amount": true
+}
+```
+- **Гарантия неотрицательного остатка**: сумма транзакций в разрезе набора атрибутов `partition_by` (например, `account_id`) никогда не опускается ниже `min_balance` (0.0).
+- **Автоматическое форсирование пополнений**: если на счете 0.0, списание блокируется и генерируется пополнение.
+- **Сессионный кэш**: актуальные балансы счетов подгружаются из СУБД перед генерацией, гарантируя консистентность между независимыми вызовами API.
+
+#### Пример создания таблицы договоров:
 ```json
 {
   "op": "create_table",
@@ -449,23 +507,9 @@ networks:
   "name": "contracts",
   "primary_key": ["contract_id"],
   "columns": [
-    {"name": "contract_id", "type": "bigint", "generator": {"kind": "sequence"}},
-    {
-      "name": "contract_end_date",
-      "type": "date",
-      "generator": {
-        "kind": "date_offset",
-        "ref_column": "contract_start_date",
-        "dim": "y",
-        "min_offset": 1,
-        "max_offset": 5
-      }
-    },
-    {
-      "name": "contract_start_date",
-      "type": "date",
-      "generator": {"kind": "random_date"}
-    }
+    {"name": "contract_id", "type": "bigint"},
+    {"name": "contract_end_date", "type": "date"},
+    {"name": "contract_start_date", "type": "date"}
   ],
   "foreign_keys": []
 }
@@ -507,7 +551,7 @@ networks:
 ```
 
 ##### `create_table`
-Создание таблицы с описанием первичного ключа, колонок, генераторов и внешних ключей:
+Создание таблицы с описанием первичного ключа, колонок и внешних ключей:
 ```json
 {
   "op": "create_table",
@@ -515,10 +559,10 @@ networks:
   "name": "orders",
   "primary_key": ["order_id"],
   "columns": [
-    {"name": "order_id", "type": "bigint", "generator": {"kind": "sequence"}},
-    {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
-    {"name": "amount", "type": "decimal(18,2)", "generator": {"kind": "random_decimal", "min": 10, "max": 5000}},
-    {"name": "order_date", "type": "date", "generator": {"kind": "random_date"}}
+    {"name": "order_id", "type": "bigint"},
+    {"name": "customer_id", "type": "bigint"},
+    {"name": "amount", "type": "decimal(18,2)"},
+    {"name": "order_date", "type": "date"}
   ],
   "foreign_keys": [
     {
@@ -572,11 +616,7 @@ networks:
   "table": "orders",
   "column": {
     "name": "status",
-    "type": "string",
-    "generator": {
-      "kind": "choice",
-      "values": ["NEW", "PAID", "CANCELLED"]
-    }
+    "type": "string"
   }
 }
 ```

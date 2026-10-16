@@ -4,11 +4,18 @@
 - Автономный сервис эмуляции СУБД, оркестрации контейнеров через Docker SDK, транзакционной эволюции схем данных (API-first) и синтетической генерации данных (FK-aware).
 - Стек: Python 3.12, FastAPI, Uvicorn, Pydantic v2, pymssql, oracledb, Faker, Docker Python SDK.
 - Источники поднимаются лениво (`wake_up`): не в `lifespan`. Данные — named volume `{prefix}{source}-data`; секреты — `/state/secrets.json`; статус — `/state/source_status.{source}.json`.
-- Принцип Safe GET (RFC 7231): GET-эндпоинты (`/sources/{source}`, `/sources/{source}/schema`, `/sources/{source}/status`, `/health`) безопасны и читают только из тома `/state` и памяти; они не запускают контейнеры СУБД. Контейнер физически поднимается только через POST `/activate` или POST `/exec`.
+- Принцип Safe GET (RFC 7231): GET-эндпоинты (`/sources/{source}`, `/sources/{source}/schema`, `/sources/{source}/status`, `/sources/{source}/rules`, `/health`) безопасны и читают только из тома `/state` и памяти; они не запускают контейнеры СУБД. Контейнер физически поднимается только через POST `/activate` или POST `/migrate` (алиас `/exec`).
 - Публичный аккаунт: `sydafa` / `sydafa` (только чтение). Внутренний DBA со случайным логином и паролем в `/state/secrets.json`. `sa` DISABLE, `pdbadmin` DROP.
 - Внешний host-порт объявляется в `sources.json` (`external_port`) и возвращается в объекте `connection`. Объект `connection` содержит готовый `jdbc_url` (поле `parameters` удалено как избыточное). Поле `activated_until` всегда в формате ISO 8601 UTC (`Z`).
-- Источники данных объявляются в `sources.json` (включая пустые базы `"mssql": {"type": "mssql", "operations": []}`).
+- Источники данных объявляются в `sources.json` в декларативном формате (`schema`: структура таблиц с FQN `schema.table`, `rules`: профили правил колонок и инвариантов, например `cumulative_balance`). Автозаливка данных при старте (`init_data`) исключена: создаются чистые таблицы и регистрируются правила.
 - `/health` = готовность API, не прогрев СУБД.
+
+## Синхронизация документации (Documentation as Code)
+- **Строгое правило актуальности документации**: Любое архитектурное изменение, доработка или рефакторинг моделей, эндпоинтов, манифеста `sources.json`, операций DDL/DML, параметров генераторов или правил инвариантов ОБЯЗАНЫ одновременно и полностью отражаться в документации проекта:
+  1. `README.md` — полное руководство пользователя, канонические примеры `sources.json`, спецификация эндпоинтов (`/migrate`, `/rules/{schema.table}`) и моделей;
+  2. `.agents/skills/sydafa-api/SKILL.md` — скилл генерации запросов API;
+  3. `AGENTS.md` — архитектурные правила и соглашения репозитория.
+- Запрещено сдавать задачу или открывать Pull Request, если в `README.md` или других файлах документации остаются устаревшие контракты (например, legacy-поля, устаревшие имена ручек или неактуальные структуры конфигурационных файлов).
 
 ## Контроль веток и Pull Request (Git Workflow)
 - Все новые изменения оформляются в отдельных ветках с префиксом `kodik/` (например, `kodik/feature-name`).
