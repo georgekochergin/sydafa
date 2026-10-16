@@ -6,7 +6,6 @@ from app.init_apply import compile_schema_decl_to_operations
 from app.models import (
     CreateTableOp,
     CumulativeBalanceInvariant,
-    FunctionalDependencyInvariant,
     MigrateRequest,
     TableRuleProfile,
 )
@@ -21,7 +20,7 @@ class TestRulesAndMigrate(unittest.TestCase):
         """Проверка операций CRUD в rules_state."""
         profile = TableRuleProfile(
             invariants=[
-                FunctionalDependencyInvariant(determinant=["account_id"], dependent=["client_id"])
+                CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount", min_balance=0.0)
             ]
         )
         rules_state.set_table_rules("mssql", "core.transactions", profile)
@@ -29,7 +28,7 @@ class TestRulesAndMigrate(unittest.TestCase):
         retrieved = rules_state.get_table_rules("mssql", "core.transactions")
         self.assertIsNotNone(retrieved)
         self.assertEqual(len(retrieved.invariants), 1)
-        self.assertIsInstance(retrieved.invariants[0], FunctionalDependencyInvariant)
+        self.assertIsInstance(retrieved.invariants[0], CumulativeBalanceInvariant)
 
         # Некорректный FQN
         with self.assertRaises(ValueError):

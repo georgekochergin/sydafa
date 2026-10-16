@@ -15,7 +15,6 @@ from .models import (
     CumulativeBalanceInvariant,
     EXEC_BATCH_ID_COLUMN,
     ForeignKey,
-    FunctionalDependencyInvariant,
     GeneratorSpec,
     LiveSchema,
     TableRuleProfile,
@@ -238,7 +237,7 @@ def _find_table(live: LiveSchema, schema: str, table_name: str) -> TableSchema:
 
 
 class GenerationSession:
-    """Сессия генерации данных с кэшированием функциональных зависимостей и балансов."""
+    """Сессия генерации данных с кэшированием накопительных балансов."""
 
     def __init__(
         self,
@@ -253,7 +252,6 @@ class GenerationSession:
         self.live = live
         self.table = table
         self.profile = profile
-        self.fd_mappings: dict[int, dict[tuple[Any, ...], tuple[Any, ...]]] = {}
         self.balances: dict[int, dict[tuple[Any, ...], float]] = {}
         self._preload_state()
 
@@ -262,23 +260,7 @@ class GenerationSession:
         cur = self.conn.cursor()
 
         for idx, inv in enumerate(self.profile.invariants):
-            if isinstance(inv, FunctionalDependencyInvariant):
-                self.fd_mappings[idx] = {}
-                det_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.determinant)
-                dep_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.dependent)
-                sql = f"SELECT DISTINCT {det_cols}, {dep_cols} FROM {qualified}"
-                try:
-                    cur.execute(sql)
-                    rows = cur.fetchall()
-                    for r in rows:
-                        det_vals = tuple(r[: len(inv.determinant)])
-                        dep_vals = tuple(r[len(inv.determinant) :])
-                        if det_vals not in self.fd_mappings[idx]:
-                            self.fd_mappings[idx][det_vals] = dep_vals
-                except Exception:
-                    pass
-
-            elif isinstance(inv, CumulativeBalanceInvariant):
+            if isinstance(inv, CumulativeBalanceInvariant):
                 self.balances[idx] = {}
                 part_cols = ", ".join(quote_ident(c, self.dialect) for c in inv.partition_by)
                 amt_col = quote_ident(inv.amount_column, self.dialect)
@@ -355,11 +337,7 @@ def _mint_new_row(
 
     # Добавляем зависимости из инвариантов
     for inv in session.profile.invariants:
-        if isinstance(inv, FunctionalDependencyInvariant):
-            for dep_col in inv.dependent:
-                if dep_col in dependencies:
-                    dependencies[dep_col].update(inv.determinant)
-        elif isinstance(inv, CumulativeBalanceInvariant):
+        if isinstance(inv, CumulativeBalanceInvariant):
             if inv.amount_column in dependencies:
                 dependencies[inv.amount_column].update(inv.partition_by)
             if inv.type_column and inv.type_column in dependencies:
@@ -379,33 +357,6 @@ def _mint_new_row(
         for c_name in ready:
             col = candidates[c_name]
             gen = session.profile.columns.get(c_name) or getattr(col, "generator", None)
-
-            # Проверяем FunctionalDependencyInvariant
-            handled = False
-            for idx, inv in enumerate(session.profile.invariants):
-                if isinstance(inv, FunctionalDependencyInvariant) and c_name in inv.dependent:
-                    det_vals = tuple(values.get(c) for c in inv.determinant)
-                    if det_vals in session.fd_mappings.get(idx, {}):
-                        dep_cached = session.fd_mappings[idx][det_vals]
-                        c_idx = inv.dependent.index(c_name)
-                        values[c_name] = dep_cached[c_idx]
-                        handled = True
-                        break
-                    else:
-                        val = _generate_value(col, values, gen=gen)
-                        values[c_name] = val
-                        # Если все dependent сгенерированы, кэшируем
-                        if all(dc in values for dc in inv.dependent):
-                            dep_vals = tuple(values[dc] for dc in inv.dependent)
-                            if idx not in session.fd_mappings:
-                                session.fd_mappings[idx] = {}
-                            session.fd_mappings[idx][det_vals] = dep_vals
-                        handled = True
-                        break
-
-            if handled:
-                remaining.remove(c_name)
-                continue
 
             # Проверяем CumulativeBalanceInvariant
             inv_handled = False

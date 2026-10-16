@@ -19,7 +19,6 @@ from app.models import (
     CumulativeBalanceInvariant,
     DateOffsetGenerator,
     FakerGenerator,
-    FunctionalDependencyInvariant,
     LiveSchema,
     RandomDateGenerator,
     RandomDecimalGenerator,
@@ -263,50 +262,6 @@ class TestGenerators(unittest.TestCase):
         with self.assertRaises(GeneratorError) as ctx:
             _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
         self.assertIn("неизвестную ref_column", str(ctx.exception))
-
-    def test_functional_dependency_invariant(self):
-        """Инвариант functional_dependency: для одного account_id клиент client_id строго стабилен."""
-        table = TableSchema(
-            name="txs",
-            schema="dbo",
-            primary_key=["tx_id"],
-            columns=[
-                ColumnSpec(name="tx_id", type="bigint"),
-                ColumnSpec(name="account_id", type="bigint"),
-                ColumnSpec(name="client_id", type="bigint"),
-            ],
-            foreign_keys=[],
-        )
-        profile = TableRuleProfile(
-            columns={
-                "tx_id": SequenceGenerator(),
-                "account_id": ChoiceGenerator(values=[101, 102, 103]),
-                "client_id": ChoiceGenerator(values=[1, 2, 3, 4, 5]),
-            },
-            invariants=[
-                FunctionalDependencyInvariant(determinant=["account_id"], dependent=["client_id"])
-            ],
-        )
-
-        live = LiveSchema(schemas=["dbo"], tables={"dbo.txs": table})
-        conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
-
-        generated_pairs = []
-        for _ in range(50):
-            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
-            last_ins, params = conn.cur.executed[-1]
-            cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
-            row_dict = dict(zip(cols, params))
-            generated_pairs.append((row_dict["account_id"], row_dict["client_id"]))
-
-        # Проверяем, что для каждого account_id существует ровно один уникальный client_id
-        acc_to_client = {}
-        for acc, client in generated_pairs:
-            if acc not in acc_to_client:
-                acc_to_client[acc] = client
-            else:
-                self.assertEqual(acc_to_client[acc], client, f"Клиент для счета {acc} изменился!")
 
     def test_cumulative_balance_invariant(self):
         """Инвариант cumulative_balance: баланс счета никогда не опускается ниже min_balance=0.0."""

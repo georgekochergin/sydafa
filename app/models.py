@@ -127,21 +127,6 @@ class ColumnSpec(BaseModel):
 
 # --- Инварианты связности данных и профили правил таблицы ---
 
-class FunctionalDependencyInvariant(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    kind: Literal["functional_dependency"] = "functional_dependency"
-    determinant: list[str] = Field(description="Список колонок-детерминантов (ключ соответствия)")
-    dependent: list[str] = Field(description="Список зависимых колонок (фиксируемые атрибуты)")
-
-    @field_validator("determinant", "dependent")
-    @classmethod
-    def check_cols(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("Список колонок не может быть пустым")
-        return [validate_identifier(col) for col in v]
-
-
 class CumulativeBalanceInvariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -189,10 +174,7 @@ class CumulativeBalanceInvariant(BaseModel):
         return (float(min_v), float(max_v))
 
 
-TableInvariant = Annotated[
-    Union[FunctionalDependencyInvariant, CumulativeBalanceInvariant],
-    Field(discriminator="kind"),
-]
+TableInvariant = CumulativeBalanceInvariant
 
 
 class TableRuleProfile(BaseModel):
