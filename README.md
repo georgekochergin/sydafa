@@ -20,7 +20,7 @@ flowchart TD
     subgraph SydafaApp["Сервис sydafa (FastAPI Core)"]
         direction TB
         L1_API["Уровень 1: Orchestration & Lifecycle API<br/>POST /sources, DELETE /sources/{source}<br/>POST /sources/{source}/activate, POST /sources/{source}/deactivate"]
-        L2_API["Уровень 2: Data, Rules & Migration API<br/>POST /sources/{source}/migrate<br/>GET/PUT/DELETE /sources/{source}/rules/{table_fqn}<br/>GET /sources/{source}/schema (Safe GET)"]
+        L2_API["Уровень 2: Data, Rules & Migration API<br/>POST /sources/{source}/migrate<br/>GET/PUT/DELETE /sources/{source}/rules/{entity_fqn}<br/>GET /sources/{source}/schema (Safe GET)"]
     end
 
     subgraph StateVolume["Постоянный том состояния (/state)"]
@@ -304,9 +304,9 @@ services:
 | `POST` | `/sources/{source}/deactivate` | Принудительная остановка базы для освобождения RAM хоста. |
 | `POST` | `/sources/{source}/reinit` | Точечная реинициализация источника из `sources.json` с пересозданием тома данных. |
 | `GET` | `/sources/{source}/rules` | Список всех зарегистрированных профилей правил генерации для источника (`TableRuleProfile`). Safe GET. |
-| `GET` | `/sources/{source}/rules/{table_fqn}` | Профиль правил генерации конкретной таблицы (`columns` + `invariants`). Safe GET. |
-| `PUT` | `/sources/{source}/rules/{table_fqn}` | Установка или обновление профиля правил генерации для таблицы (`columns` и/или `invariants`). Опциональный query-параметр `?validate_existing=false` (мягкий режим; при `true` — строгая проверка данных в СУБД с ошибкой 422). |
-| `DELETE` | `/sources/{source}/rules/{table_fqn}` | Сброс правил генерации таблицы. |
+| `GET` | `/sources/{source}/rules/{entity_fqn}` | Профиль правил генерации конкретной таблицы (`columns` + `invariants`). Safe GET. |
+| `PUT` | `/sources/{source}/rules/{entity_fqn}` | Установка или обновление профиля правил генерации для таблицы (`columns` и/или `invariants`). Опциональный query-параметр `?validate_existing=false` (мягкий режим; при `true` — строгая проверка данных в СУБД с ошибкой 422). |
+| `DELETE` | `/sources/{source}/rules/{entity_fqn}` | Сброс правил генерации таблицы. |
 | `GET` | `/sources/{source}/schema` | Детальная live-схема данных: структура таблиц, типы колонок, первичные и внешние ключи. Safe GET. |
 | `POST` | `/sources/{source}/migrate` | **Единый метод миграций**: атомарное применение DDL (схемы, таблицы, колонки) и DML (`truncate`, `append`, `update`, `delete`) в режиме All-or-Nothing. |
 
@@ -320,9 +320,9 @@ services:
 
 > **Инварианты связности данных** (см. [Раздел 6.4: Инварианты связности данных](#64-инварианты-связности-данных)) — это декларативные правила согласованности, накладываемые на совокупность строк таблицы (партицию). В отличие от генераторов колонок, вычисляющих изолированные значения внутри одной записи, инварианты задают условия, которым должен удовлетворять весь набор строк сущности как единое целое (накопительные итоги, агрегатные соотношения, цепочки состояний).
 
-### 6.1. Управление профилями через `/sources/{source}/rules/{table_fqn}`
+### 6.1. Управление профилями через `/sources/{source}/rules/{entity_fqn}`
 
-Эндпоинт `PUT /sources/{source}/rules/{table_fqn}` принимает полный профиль таблицы:
+Эндпоинт `PUT /sources/{source}/rules/{entity_fqn}` принимает полный профиль таблицы:
 ```json
 {
   "columns": {
@@ -384,7 +384,7 @@ services:
 Каждый поддерживаемый инвариант таблицы включает в себя обязательный базовый параметр `validate_existing`, определяющий режим его применения и строгости:
 
 - **`validate_existing: false` (по умолчанию — мягкий режим)**:
-  - **Регистрация без запуска СУБД (Safe Register, 0 MB RAM)**: вызов `PUT /sources/{source}/rules/{table_fqn}` регистрирует профиль правил в состоянии `/state` без проверки существующих строк и не запускает спящий контейнер СУБД.
+  - **Регистрация без запуска СУБД (Safe Register, 0 MB RAM)**: вызов `PUT /sources/{source}/rules/{entity_fqn}` регистрирует профиль правил в состоянии `/state` без проверки существующих строк и не запускает спящий контейнер СУБД.
   - **Свободные мутации для тестирования**: операции `update` и `delete` не блокируются, позволяя инженерам КХД и ETL моделировать тестовые аномалии и граничные ситуации (например, технический овердрафт или сбой биллинга).
   - **`append` как умный балансировщик**: движок при генерации новых строк считывает текущее агрегатное состояние из БД и автоматически генерирует компенсирующие значения (например, только пополнения `CREDIT`), возвращая набор строк сущности в согласованную зону.
 - **`validate_existing: true` (строгий режим)**:
@@ -448,7 +448,7 @@ services:
   "operations": [
     {
       "op": "create_table",
-      "table_fqn": "demo.contracts",
+      "entity_fqn": "demo.contracts",
       "primary_key": ["contract_id"],
       "columns": [
         {"name": "contract_id", "type": "bigint"},
@@ -489,7 +489,7 @@ services:
   "operations": [
     {
       "op": "append",
-      "table_fqn": "demo.contracts",
+      "entity_fqn": "demo.contracts",
       "rows": 10
     }
   ]
@@ -503,10 +503,10 @@ services:
 
 Метод `POST /sources/{source}/migrate` объединяет DDL и DML в единую транзакцию All-or-Nothing.
 
-### 7.1. Единый FQN-идентификатор таблицы (`table_fqn`)
+### 7.1. Единый FQN-идентификатор сущности (`entity_fqn`)
 
-Все операции над таблицами и колонками адресуются через единый атрибут:
-`table_fqn: "<схема>.<таблица>"` (например, `"demo.orders"` или `"core.contracts"`).
+Все операции над сущностями адресуются через единый атрибут:
+`entity_fqn: "<схема>.<таблица>"` (например, `"demo.orders"` или `"core.contracts"`). В секции `foreign_keys` внешние связи ссылаются на целевую сущность через единый атрибут `ref_entity_fqn: "<схема>.<таблица>"`.
 
 ### 7.2. Справочник DDL-операций (10 операций)
 
@@ -543,7 +543,7 @@ services:
 ```json
 {
   "op": "create_table",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "primary_key": ["order_id"],
   "columns": [
     {"name": "order_id", "type": "bigint"},
@@ -554,8 +554,7 @@ services:
   "foreign_keys": [
     {
       "columns": ["customer_id"],
-      "ref_schema": "demo",
-      "ref_table": "customers",
+      "ref_entity_fqn": "demo.customers",
       "ref_columns": ["customer_id"]
     }
   ]
@@ -567,7 +566,7 @@ services:
 ```json
 {
   "op": "drop_table",
-  "table_fqn": "demo.orders"
+  "entity_fqn": "demo.orders"
 }
 ```
 
@@ -576,7 +575,7 @@ services:
 ```json
 {
   "op": "rename_table",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "to_name": "client_orders"
 }
 ```
@@ -586,7 +585,7 @@ services:
 ```json
 {
   "op": "transfer_table",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "to_schema": "core"
 }
 ```
@@ -596,7 +595,7 @@ services:
 ```json
 {
   "op": "add_column",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "column": {
     "name": "status",
     "type": "string"
@@ -609,7 +608,7 @@ services:
 ```json
 {
   "op": "drop_column",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "name": "status"
 }
 ```
@@ -619,7 +618,7 @@ services:
 ```json
 {
   "op": "rename_column",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "from_name": "status",
   "to_name": "order_status"
 }
@@ -634,7 +633,7 @@ services:
 ```json
 {
   "op": "truncate",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "cascade": true
 }
 ```
@@ -644,7 +643,7 @@ services:
 ```json
 {
   "op": "append",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "rows": 50,
   "new_key_ratio": 0.1
 }
@@ -657,7 +656,7 @@ services:
 ```json
 {
   "op": "update",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "predicate": [
     {"column": "order_id", "operator": "=", "value": 1}
   ],
@@ -667,7 +666,7 @@ services:
   "limit": 10
 }
 ```
-- `table_fqn` (строка, обязательно): полное имя таблицы (`schema.table`);
+- `entity_fqn` (строка, обязательно): полное имя сущности (`schema.table`);
 - `set` (объект, обязательно): обновляемые колонки и их значения (системные колонки `_batch_id` и `_exec_batch_id` защищены: `_batch_id` обновляется актуальным батчем автоматически);
 - `predicate` (массив условий, опционально, по умолчанию `[]`): операторы `=`, `!=`, `>`, `<`, `>=`, `<=`. При пустом предикате операция применяется ко всем строкам таблицы;
 - `limit` (целое число > 0, опционально): ограничение «обновить не более N случайных строк, удовлетворяющих предикату». Механизм полностью PK-независим (работает для heap-таблиц и дубликатов). Снимки строк ДО обновления архивируются в таблицу `_upd_<table>`.
@@ -676,7 +675,7 @@ services:
 ```json
 {
   "op": "update",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "set": {
     "status": "CANCELLED"
   },
@@ -689,7 +688,7 @@ services:
 ```json
 {
   "op": "delete",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "predicate": [
     {"column": "order_id", "operator": ">=", "value": 100}
   ],
@@ -697,7 +696,7 @@ services:
   "cascade": false
 }
 ```
-- `table_fqn` (строка, обязательно): полное имя таблицы (`schema.table`);
+- `entity_fqn` (строка, обязательно): полное имя сущности (`schema.table`);
 - `predicate` (массив условий, опционально, по умолчанию `[]`): список условий фильтрации;
 - `limit` (целое число > 0, опционально): удалить не более N случайных строк, удовлетворяющих предикату. Если подходящих строк меньше N, удаляются все найденные строки без ошибок. Удаляемые строки сохраняются в таблицу аудита `_del_<table>`;
 - `cascade` (bool, по умолчанию `false`): каскадное удаление зависимых строк во внешних таблицах по Foreign Key.
@@ -706,7 +705,7 @@ services:
 ```json
 {
   "op": "delete",
-  "table_fqn": "demo.orders",
+  "entity_fqn": "demo.orders",
   "limit": 5
 }
 ```

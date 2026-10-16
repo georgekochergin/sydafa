@@ -231,13 +231,12 @@ def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecO
     if not isinstance(tables_dict, dict) or not tables_dict:
         return []
 
-    from .models import ColumnSpec, CreateSchemaOp, CreateTableOp, ForeignKey
-    from .rules_state import validate_table_fqn
+    from .models import ColumnSpec, CreateSchemaOp, CreateTableOp, ForeignKey, validate_entity_fqn
 
     schemas: list[str] = []
     parsed_tables: list[tuple[str, str, dict[str, Any]]] = []
     for fqn, t_spec in tables_dict.items():
-        schema_name, table_name = validate_table_fqn(fqn)
+        schema_name, table_name = validate_entity_fqn(fqn)
         if schema_name not in schemas:
             schemas.append(schema_name)
         parsed_tables.append((schema_name, table_name, t_spec if isinstance(t_spec, dict) else {}))
@@ -253,12 +252,9 @@ def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecO
         fks_raw = t_spec.get("foreign_keys", [])
         t_deps: set[str] = set()
         for fk in fks_raw:
-            ref_tbl = fk.get("ref_table") if isinstance(fk, dict) else getattr(fk, "ref_table", None)
-            ref_sch = (fk.get("ref_schema") if isinstance(fk, dict) else getattr(fk, "ref_schema", None)) or s_name
-            if ref_tbl:
-                ref_fqn = f"{ref_sch}.{ref_tbl}"
-                if ref_fqn != fqn and ref_fqn in tables_dict:
-                    t_deps.add(ref_fqn)
+            ref_fqn = fk.get("ref_entity_fqn") if isinstance(fk, dict) else getattr(fk, "ref_entity_fqn", None)
+            if ref_fqn and ref_fqn != fqn and ref_fqn in tables_dict:
+                t_deps.add(ref_fqn)
         deps[fqn] = t_deps
 
     remaining = set(table_map.keys())
@@ -296,7 +292,7 @@ def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecO
 
         operations.append(
             CreateTableOp(
-                table_fqn=f"{s_name}.{t_name}",
+                entity_fqn=f"{s_name}.{t_name}",
                 primary_key=pk,
                 columns=col_specs,
                 foreign_keys=fks_list,
@@ -334,12 +330,12 @@ def apply_init_for_source(source: str) -> None:
         from .models import TableRuleProfile
         from .rules_state import set_table_rules
         logger.info("Манифест sources.json: сохранение %d профилей правил для '%s'...", len(rules_raw), source)
-        for table_fqn, prof_data in rules_raw.items():
+        for entity_fqn, prof_data in rules_raw.items():
             try:
                 prof = TableRuleProfile(**prof_data) if isinstance(prof_data, dict) else prof_data
-                set_table_rules(source, table_fqn, prof)
+                set_table_rules(source, entity_fqn, prof)
             except Exception as e:
-                logger.warning("Не удалось сохранить профиль правил для '%s.%s': %s", source, table_fqn, e)
+                logger.warning("Не удалось сохранить профиль правил для '%s.%s': %s", source, entity_fqn, e)
 
     # 2. Декларативная схема schema (приоритетный формат)
     schema_raw = val.get("schema", {})

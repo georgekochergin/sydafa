@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import STATE_DIR
-from .models import TableRuleProfile, validate_table_fqn
+from .models import TableRuleProfile, validate_entity_fqn
 
 logger = logging.getLogger("sydafa.rules_state")
 
@@ -53,27 +53,27 @@ def get_all_rules(source: str) -> dict[str, TableRuleProfile]:
     return _rules_cache[source]
 
 
-def get_table_rules(source: str, table_fqn: str) -> TableRuleProfile | None:
-    """Возвращает профиль правил для конкретной таблицы schema.table или None."""
-    validate_table_fqn(table_fqn)
+def get_table_rules(source: str, entity_fqn: str) -> TableRuleProfile | None:
+    """Возвращает профиль правил для конкретной сущности schema.table или None."""
+    validate_entity_fqn(entity_fqn)
     all_rules = get_all_rules(source)
-    return all_rules.get(table_fqn)
+    return all_rules.get(entity_fqn)
 
 
-def set_table_rules(source: str, table_fqn: str, profile: TableRuleProfile) -> None:
-    """Устанавливает или перезаписывает профиль правил для таблицы schema.table."""
-    validate_table_fqn(table_fqn)
+def set_table_rules(source: str, entity_fqn: str, profile: TableRuleProfile) -> None:
+    """Устанавливает или перезаписывает профиль правил для сущности schema.table."""
+    validate_entity_fqn(entity_fqn)
     all_rules = dict(get_all_rules(source))
-    all_rules[table_fqn] = profile
+    all_rules[entity_fqn] = profile
     save_rules(source, all_rules)
 
 
-def delete_table_rules(source: str, table_fqn: str) -> bool:
-    """Удаляет профиль правил таблицы. Возвращает True, если правило существовало."""
-    validate_table_fqn(table_fqn)
+def delete_table_rules(source: str, entity_fqn: str) -> bool:
+    """Удаляет профиль правил сущности. Возвращает True, если правило существовало."""
+    validate_entity_fqn(entity_fqn)
     all_rules = dict(get_all_rules(source))
-    if table_fqn in all_rules:
-        del all_rules[table_fqn]
+    if entity_fqn in all_rules:
+        del all_rules[entity_fqn]
         save_rules(source, all_rules)
         return True
     return False
@@ -94,7 +94,7 @@ def reset_rules_cache(source: str) -> None:
 
 def validate_table_invariants_on_data(
     source: str,
-    table_fqn: str,
+    entity_fqn: str,
     profile: TableRuleProfile,
     conn: Any = None,
 ) -> None:
@@ -109,7 +109,7 @@ def validate_table_invariants_on_data(
     from .schema_state import get_live_schema
     from .sources import get_source
 
-    schema_name, table_name = validate_table_fqn(table_fqn)
+    schema_name, table_name = validate_entity_fqn(entity_fqn)
     live = get_live_schema(source)
     if f"{schema_name}.{table_name}" not in live.tables:
         return
@@ -132,7 +132,7 @@ def validate_table_invariants_on_data(
                     cur.execute(sql)
                     violations = cur.fetchall()
                 except Exception as e:
-                    logger.warning("Не удалось выполнить проверочный запрос для '%s': %s", table_fqn, e)
+                    logger.warning("Не удалось выполнить проверочный запрос для '%s': %s", entity_fqn, e)
                     violations = []
 
                 if violations:
@@ -144,7 +144,7 @@ def validate_table_invariants_on_data(
                     else:
                         part_desc = "глобальный "
                     raise ValueError(
-                        f"Невозможно применить правило cumulative_balance к таблице '{table_fqn}': "
+                        f"Невозможно применить правило cumulative_balance к сущности '{entity_fqn}': "
                         f"{part_desc}текущий накопленный баланс равен {sum_val}, "
                         f"что нарушает ограничение min_balance={inv.min_balance}"
                     )

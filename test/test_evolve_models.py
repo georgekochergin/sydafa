@@ -76,7 +76,7 @@ class TestEvolveModels(unittest.TestCase):
                 {"op": "create_schema", "name": "demo"},
                 {
                     "op": "create_table",
-                    "table_fqn": "demo.customers",
+                    "entity_fqn": "demo.customers",
                     "primary_key": ["customer_id"],
                     "columns": [
                         {"name": "customer_id", "type": "bigint", "generator": {"kind": "sequence"}},
@@ -87,33 +87,33 @@ class TestEvolveModels(unittest.TestCase):
                 },
                 {
                     "op": "add_column",
-                    "table_fqn": "demo.customers",
+                    "entity_fqn": "demo.customers",
                     "column": {"name": "created_at", "type": "date", "generator": {"kind": "random_date"}},
                 },
                 {
                     "op": "rename_column",
-                    "table_fqn": "demo.customers",
+                    "entity_fqn": "demo.customers",
                     "from_name": "name",
                     "to_name": "full_name",
                 },
                 {
                     "op": "rename_table",
-                    "table_fqn": "demo.customers",
+                    "entity_fqn": "demo.customers",
                     "to_name": "clients",
                 },
                 {
                     "op": "drop_column",
-                    "table_fqn": "demo.clients",
+                    "entity_fqn": "demo.clients",
                     "name": "segment",
                 },
                 {
                     "op": "transfer_table",
-                    "table_fqn": "demo.clients",
+                    "entity_fqn": "demo.clients",
                     "to_schema": "core",
                 },
                 {
                     "op": "drop_table",
-                    "table_fqn": "core.clients",
+                    "entity_fqn": "core.clients",
                 },
                 {
                     "op": "rename_schema",
@@ -147,7 +147,7 @@ class TestEvolveModels(unittest.TestCase):
             CreateSchemaOp(name="schema with space")
 
         with self.assertRaises(ValidationError):
-            RenameColumnOp(table_fqn="demo.customers", from_name="col", to_name="bad-col")
+            RenameColumnOp(entity_fqn="demo.customers", from_name="col", to_name="bad-col")
 
     def test_dml_models(self):
         append_req = AppendRequest(rows=10, new_key_ratio=0.5)

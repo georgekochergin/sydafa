@@ -213,23 +213,23 @@ def list_source_rules(source: str):
     return rules_state.get_all_rules(source)
 
 
-@app.get("/sources/{source}/rules/{table_fqn:path}", response_model=TableRuleProfile)
-def get_table_rule_profile(source: str, table_fqn: str):
+@app.get("/sources/{source}/rules/{entity_fqn:path}", response_model=TableRuleProfile)
+def get_table_rule_profile(source: str, entity_fqn: str):
     """Возвращает профиль правил генерации конкретной таблицы schema.table."""
     _assert_source(source)
     try:
-        profile = rules_state.get_table_rules(source, table_fqn)
+        profile = rules_state.get_table_rules(source, entity_fqn)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
     if profile is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для таблицы '{table_fqn}' правила генерации не найдены")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для сущности '{entity_fqn}' правила генерации не найдены")
     return profile
 
 
-@app.put("/sources/{source}/rules/{table_fqn:path}", response_model=TableRuleProfile)
+@app.put("/sources/{source}/rules/{entity_fqn:path}", response_model=TableRuleProfile)
 def set_table_rule_profile(
     source: str,
-    table_fqn: str,
+    entity_fqn: str,
     profile: TableRuleProfile,
     validate_existing: bool = Query(
         default=False,
@@ -246,25 +246,25 @@ def set_table_rule_profile(
                     inv.validate_existing = True
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
+            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
         elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            rules_state.validate_table_invariants_on_data(source, table_fqn, profile)
-        rules_state.set_table_rules(source, table_fqn, profile)
+            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
+        rules_state.set_table_rules(source, entity_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
     return profile
 
 
-@app.delete("/sources/{source}/rules/{table_fqn:path}")
-def delete_table_rule_profile(source: str, table_fqn: str):
+@app.delete("/sources/{source}/rules/{entity_fqn:path}")
+def delete_table_rule_profile(source: str, entity_fqn: str):
     """Сбрасывает профиль правил генерации таблицы schema.table."""
     _assert_source(source)
     try:
-        deleted = rules_state.delete_table_rules(source, table_fqn)
+        deleted = rules_state.delete_table_rules(source, entity_fqn)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
     if not deleted:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для таблицы '{table_fqn}' правила генерации не найдены")
-    return {"status": "ok", "deleted": table_fqn}
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для сущности '{entity_fqn}' правила генерации не найдены")
+    return {"status": "ok", "deleted": entity_fqn}

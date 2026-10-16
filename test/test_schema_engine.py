@@ -47,7 +47,7 @@ class TestSchemaEngine(unittest.TestCase):
 
         # Create table
         table_op = CreateTableOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             primary_key=["customer_id"],
             columns=[
                 ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
@@ -84,29 +84,29 @@ class TestSchemaEngine(unittest.TestCase):
         self._create_schema_and_table("mssql")
         for col in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN):
             with self.subTest(column=col):
-                op = DropColumnOp(table_fqn="demo.customers", name=col)
+                op = DropColumnOp(entity_fqn="demo.customers", name=col)
                 with self.assertRaises(SchemaEvolutionError):
                     _build_ddl_and_update_state(op, "mssql", self.live, 2)
 
     def test_rename_and_add_system_columns_forbidden(self):
         self._create_schema_and_table("mssql")
         # Переименование системной колонки
-        op = RenameColumnOp(table_fqn="demo.customers", from_name=BATCH_ID_COLUMN, to_name="batch")
+        op = RenameColumnOp(entity_fqn="demo.customers", from_name=BATCH_ID_COLUMN, to_name="batch")
         with self.assertRaises(SchemaEvolutionError):
             _build_ddl_and_update_state(op, "mssql", self.live, 2)
         # Переименование колонки в системное имя
-        op2 = RenameColumnOp(table_fqn="demo.customers", from_name="name", to_name=EXEC_BATCH_ID_COLUMN)
+        op2 = RenameColumnOp(entity_fqn="demo.customers", from_name="name", to_name=EXEC_BATCH_ID_COLUMN)
         with self.assertRaises(SchemaEvolutionError):
             _build_ddl_and_update_state(op2, "mssql", self.live, 3)
         # Ручное добавление системной колонки
-        op3 = AddColumnOp(table_fqn="demo.customers", column=ColumnSpec(name=EXEC_BATCH_ID_COLUMN, type="bigint"))
+        op3 = AddColumnOp(entity_fqn="demo.customers", column=ColumnSpec(name=EXEC_BATCH_ID_COLUMN, type="bigint"))
         with self.assertRaises(SchemaEvolutionError):
             _build_ddl_and_update_state(op3, "mssql", self.live, 4)
 
     def test_recreate_audit_tables_on_add_column(self):
         self._create_schema_and_table("mssql")
         add_op = AddColumnOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             column=ColumnSpec(name="email", type="string"),
         )
         ddl, _ = _build_ddl_and_update_state(add_op, "mssql", self.live, 2)
@@ -127,7 +127,7 @@ class TestSchemaEngine(unittest.TestCase):
 
         # Create table
         table_op = CreateTableOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             primary_key=["customer_id"],
             columns=[
                 ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
@@ -140,7 +140,7 @@ class TestSchemaEngine(unittest.TestCase):
 
         # Rename column
         rename_col_op = RenameColumnOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             from_name="name",
             to_name="full_name",
         )
@@ -151,7 +151,7 @@ class TestSchemaEngine(unittest.TestCase):
 
         # Rename table
         rename_table_op = RenameTableOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             to_name="clients",
         )
         ddl, desc = _build_ddl_and_update_state(rename_table_op, "mssql", self.live, 3)

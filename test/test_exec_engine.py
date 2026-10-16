@@ -53,7 +53,7 @@ def _build_live_with_audit() -> LiveSchema:
     _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", live, 0)
     _build_ddl_and_update_state(
         CreateTableOp(
-            table_fqn="demo.customers",
+            entity_fqn="demo.customers",
             primary_key=["customer_id"],
             columns=[
                 ColumnSpec(name="customer_id", type="bigint"),
@@ -74,22 +74,22 @@ class TestExecModels(unittest.TestCase):
             {"op": "create_schema", "name": "demo"},
             {
                 "op": "create_table",
-                "table_fqn": "demo.customers",
+                "entity_fqn": "demo.customers",
                 "primary_key": ["id"],
                 "columns": [{"name": "id", "type": "bigint"}],
             },
-            {"op": "truncate", "table_fqn": "demo.customers"},
-            {"op": "append", "table_fqn": "demo.customers", "rows": 5},
+            {"op": "truncate", "entity_fqn": "demo.customers"},
+            {"op": "append", "entity_fqn": "demo.customers", "rows": 5},
             {
                 "op": "update",
-                "table_fqn": "demo.customers",
+                "entity_fqn": "demo.customers",
                 "predicate": [{"column": "id", "operator": "=", "value": 1}],
                 "set": {"name": "test"},
                 "limit": 5,
             },
             {
                 "op": "delete",
-                "table_fqn": "demo.customers",
+                "entity_fqn": "demo.customers",
                 "predicate": [{"column": "id", "operator": "=", "value": 1}],
                 "limit": 5,
             },
@@ -102,7 +102,7 @@ class TestExecModels(unittest.TestCase):
         self.assertIsInstance(ops[3], AppendOp)
         self.assertIsInstance(ops[4], UpdateOp)
         self.assertIsInstance(ops[5], DeleteOp)
-        self.assertEqual(ops[1].table_fqn, "demo.customers")
+        self.assertEqual(ops[1].entity_fqn, "demo.customers")
         self.assertEqual(ops[1].schema_, "demo")
         self.assertEqual(ops[1].table, "customers")
         self.assertEqual(ops[4].limit, 5)
@@ -116,13 +116,13 @@ class TestExecModels(unittest.TestCase):
         raw_ops = [
             {
                 "op": "delete",
-                "table_fqn": "demo.customers",
+                "entity_fqn": "demo.customers",
                 "predicate": [{"column": "amount", "operator": "<=", "value": 0}],
                 "limit": 10,
             },
             {
                 "op": "update",
-                "table_fqn": "demo.customers",
+                "entity_fqn": "demo.customers",
                 "predicate": [{"column": "status", "operator": "=", "value": "INACTIVE"}],
                 "set": {"status": "ARCHIVED"},
                 "limit": 5,
@@ -205,7 +205,7 @@ class TestBatchIdAudit(unittest.TestCase):
         live = LiveSchema(schemas=["demo"], tables={})
         # 1. create_table
         create_op = CreateTableOp(
-            table_fqn="demo.contracts",
+            entity_fqn="demo.contracts",
             primary_key=["id"],
             columns=[
                 ColumnSpec(name="id", type="bigint", generator={"kind": "sequence"}),
@@ -220,7 +220,7 @@ class TestBatchIdAudit(unittest.TestCase):
         # 2. add_column (DDL после создания)
         from app.models import AddColumnOp
         add_col_op = AddColumnOp(
-            table_fqn="demo.contracts",
+            entity_fqn="demo.contracts",
             column=ColumnSpec(name="status", type="string", generator={"kind": "choice", "values": ["NEW"]}),
         )
         stmts2, _ = _build_ddl_and_update_state(add_col_op, "mssql", live, 1)
@@ -247,7 +247,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка PK-независимого UPDATE и DELETE в MSSQL (Updatable CTE + OUTPUT INTO)."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            table_fqn="demo.logs",
+            entity_fqn="demo.logs",
             primary_key=[],  # Таблица БЕЗ первичного ключа
             columns=[
                 ColumnSpec(name="message", type="string", generator={"kind": "faker", "provider": "sentence"}),
@@ -308,7 +308,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка PK-независимого UPDATE и DELETE в Oracle через системный ROWID."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            table_fqn="demo.logs",
+            entity_fqn="demo.logs",
             primary_key=[],  # Таблица БЕЗ первичного ключа
             columns=[
                 ColumnSpec(name="message", type="string", generator={"kind": "faker", "provider": "sentence"}),
@@ -391,7 +391,7 @@ class TestBatchIdAudit(unittest.TestCase):
         """Проверка Oracle, когда строк 0 — операция завершается без вызова архива и мутации."""
         live = LiveSchema(schemas=["demo"], tables={})
         create_op = CreateTableOp(
-            table_fqn="demo.empty_tbl",
+            entity_fqn="demo.empty_tbl",
             primary_key=[],
             columns=[ColumnSpec(name="v", type="bigint")],
         )
