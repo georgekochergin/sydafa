@@ -721,7 +721,64 @@ services:
 
 ---
 
-## 8. Тестирование и верификация
+## 8. Интеграционный слой для Apache Airflow (`sydafa-airflow`)
+
+Для оркестрации эмулятора sydafa в пайплайнах Apache Airflow разработан переиспользуемый пакет **`sydafa-airflow`** (директория [`integrations/airflow`](integrations/airflow)).
+
+Пакет предоставляет хук `SydafaHook` и 3 Airflow-оператора:
+- **`SydafaActivateOperator`**: явный Lazy Start и продление TTL СУБД перед чтением;
+- **`SydafaMigrateOperator`**: атомарная эволюция схем DDL и синтетическая генерация DML;
+- **`SydafaDeactivateOperator`**: принудительная остановка базы для освобождения RAM хоста.
+
+### 8.1. Установка в сторонних проектах
+```text
+git+https://github.com/georgekochergin/sydafa.git#subdirectory=integrations/airflow
+```
+
+### 8.2. Обязательный параметр `conn_id`
+Все операторы и хук требуют обязательного указания идентификатора Airflow Connection (`conn_id`). Регистрация подключения:
+- **Переменная окружения**: `AIRFLOW_CONN_SYDAFA_DEFAULT='http://sydafa:8000'`
+- **CLI**: `airflow connections add sydafa_default --conn-type http --conn-host http://sydafa:8000`
+- **UI**: Admin -> Connections -> Add (Id: `sydafa_default`, Type: `HTTP`, Host: `http://sydafa:8000`)
+
+### 8.3. Пример использования в DAG
+```python
+from sydafa_airflow.operators import (
+    SydafaActivateOperator,
+    SydafaMigrateOperator,
+    SydafaDeactivateOperator,
+)
+
+activate = SydafaActivateOperator(
+    task_id="activate_source",
+    conn_id="sydafa_default",
+    source="mssql",
+    ttl_minutes=15,
+)
+
+migrate = SydafaMigrateOperator(
+    task_id="seed_data",
+    conn_id="sydafa_default",
+    source="mssql",
+    operations=[
+        {"op": "append", "entity_fqn": "demo.orders", "rows": 50},
+    ],
+)
+
+deactivate = SydafaDeactivateOperator(
+    task_id="stop_source",
+    conn_id="sydafa_default",
+    source="mssql",
+)
+
+activate >> migrate >> deactivate
+```
+
+Подробная документация приведена в [integrations/airflow/README.md](integrations/airflow/README.md).
+
+---
+
+## 9. Тестирование и верификация
 
 1. **Локальный запуск модульных тестов**:
    ```bash
