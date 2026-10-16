@@ -45,7 +45,9 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 ## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{schema.table}`
 
-Принимает профиль правил генерации `TableRuleProfile`:
+Принимает профиль правил генерации `TableRuleProfile`.
+Опциональный query-параметр: `?validate_existing=false` (по умолчанию `false` — мягкий режим без проверок; при `true` — строгая проверка существующих данных в СУБД с ошибкой 422 при обнаружении нарушений).
+
 ```json
 {
   "columns": {

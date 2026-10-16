@@ -82,3 +82,61 @@ class TestRulesAndMigrate(unittest.TestCase):
             ]
         )
         self.assertEqual(len(req.operations), 2)
+
+    @patch("app.db_connectors.get_connection")
+    @patch("app.schema_state.get_live_schema")
+    @patch("app.sources.get_source")
+    def test_validate_invariants_violation_and_success(self, mock_get_source, mock_get_live, mock_get_conn):
+        """Проверка строгой валидации существующих данных в validate_table_invariants_on_data."""
+        from app.models import ColumnSpec, LiveSchema, SourceConfig, TableSchema
+
+        table = TableSchema(
+            name="transactions",
+            schema="core",
+            primary_key=["id"],
+            columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="amount", type="decimal(12,2)")],
+            foreign_keys=[],
+        )
+        mock_get_live.return_value = LiveSchema(schemas=["core"], tables={"core.transactions": table})
+        mock_get_source.return_value = SourceConfig(name="mssql", type="mssql", host="host", port=1433)
+
+        class MockCursor:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def execute(self, sql):
+                pass
+
+            def fetchall(self):
+                return self._rows
+
+        class MockConn:
+            def __init__(self, rows):
+                self.cur = MockCursor(rows)
+
+            def cursor(self):
+                return self.cur
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        profile = TableRuleProfile(
+            invariants=[
+                CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount", min_balance=0.0)
+            ]
+        )
+
+        # 1. Случай нарушения: остаток -1500.00
+        mock_get_conn.return_value = MockConn([([101], -1500.00)])
+        with self.assertRaises(ValueError) as ctx:
+            rules_state.validate_table_invariants_on_data("mssql", "core.transactions", profile)
+        self.assertIn("отрицательн" if "отрицательн" in str(ctx.exception) else "нарушает ограничение", str(ctx.exception))
+        self.assertIn("101", str(ctx.exception))
+
+        # 2. Случай успеха: нет строк с нарушениями (пустая выборка HAVING)
+        mock_get_conn.return_value = MockConn([])
+        # Не должно вызывать исключений
+        rules_state.validate_table_invariants_on_data("mssql", "core.transactions", profile)
