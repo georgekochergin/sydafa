@@ -95,7 +95,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 | Операция (`op`) | Обязательные поля | Опциональные поля | Назначение |
 |---|---|---|---|
 | `truncate` | `entity_fqn` | `cascade` (bool) | Очистка таблицы |
-| `append` | `entity_fqn`, `rows` | `new_key_ratio` (float) | Синтетическое наполнение по генераторам колонок |
+| `append` | `entity_fqn`, `rows` | `new_key_ratio` (float, def 0.1) | Синтетическое наполнение по генераторам колонок. `new_key_ratio` задает вероятность генерации новой строки в родительской таблице FK (при пустом родителе — всегда создается; при 0.0 — только существующие ключи; при 0.01 — ~1% новых родителей; при 1.0 — 100% новых) |
 | `update` | `entity_fqn`, `set` | `predicate` (list), `limit` (int) | Обновление строк по предикату и/или не более N случайных строк |
 | `delete` | `entity_fqn` | `predicate` (list), `cascade` (bool), `limit` (int) | Удаление строк по предикату и/или не более N случайных строк |
 
