@@ -116,13 +116,14 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
     last_err: Exception | None = None
     is_init = init_apply.is_source_initialized(config.name)
 
+    db_host = container_name_for(config)
     while time.time() < deadline:
         try:
             if config.type == "mssql":
                 import pymssql
                 try:
                     conn = pymssql.connect(
-                        server=config.host,
+                        server=db_host,
                         port=config.port,
                         user=secrets.dba_user,
                         password=secrets.dba_password,
@@ -135,7 +136,7 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     last_err = e
                     if not is_init:
                         conn = pymssql.connect(
-                            server=config.host,
+                            server=db_host,
                             port=config.port,
                             user="sa",
                             password=secrets.mssql_sa_password,
@@ -147,7 +148,14 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
             elif config.type == "oracle":
                 import oracledb
                 try:
-                    dsn = oracledb.makedsn(config.host, config.port, service_name=SYDAFA_DB)
+                    dsn = oracledb.makedsn(db_host, config.port, service_name=SYDAFA_DB)
+                    conn = oracledb.connect(user=secrets.dba_user, password=secrets.dba_password, dsn=dsn)
+                    conn.close()
+                    return
+                except Exception as e:
+                    last_err = e
+                    if not is_init:
+                        dsn = oracledb.makedsn(db_host, config.port, service_name="FREE")
                     conn = oracledb.connect(user=secrets.dba_user, password=secrets.dba_password, dsn=dsn)
                     conn.close()
                     return
@@ -190,7 +198,8 @@ def build_connection_details(
 ) -> ConnectionDetails:
     is_external = bool(config.external_port)
     port = config.external_port if is_external else config.port
-    host = "localhost" if is_external else (request_host or config.host)
+    db_host = container_name_for(config)
+    host = "localhost" if is_external else (request_host or db_host)
 
     if config.type == "mssql":
         jdbc_url = f"jdbc:sqlserver://{host}:{port};databaseName={SYDAFA_DB};trustServerCertificate=true;encrypt=false"
@@ -257,7 +266,7 @@ def _run_container(
     container = client.containers.run(
         image=image_name,
         name=name,
-        hostname=config.host,
+        hostname=name,
         detach=True,
         environment=environment,
         ports=ports,
