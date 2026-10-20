@@ -305,10 +305,13 @@ def wake_up(
         container = _get_container(client, name)
 
         if container is not None:
-            # Проверяем, изменился ли external_port в sources.json по сравнению с запущенным контейнером
+            # Проверяем, изменился ли external_port в sources.json по сравнению с контейнером.
+            # Порты надежно читаются из HostConfig.PortBindings даже когда контейнер остановлен (в отличие от NetworkSettings.Ports).
             current_ext_port: int | None = None
             try:
-                ports_dict = container.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
+                host_config_ports = container.attrs.get("HostConfig", {}).get("PortBindings", {}) or {}
+                network_ports = container.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
+                ports_dict = host_config_ports or network_ports
                 internal_key = f"{config.port}/tcp"
                 bindings = ports_dict.get(internal_key)
                 if bindings and isinstance(bindings, list) and len(bindings) > 0:
@@ -446,7 +449,13 @@ def sweep_idle_sources() -> None:
                 pass
 
             # Контейнер включен вручную вне API sydafa или без активного TTL
-            if container.status == "running" and (status.get("state") != "running" or not status.get("activated_until")):
+            # Игнорируем контейнеры в промежуточном статусе 'starting' (в процессе поднятия через wake_up)
+            current_state = status.get("state")
+            if (
+                container.status == "running"
+                and current_state != "starting"
+                and (current_state != "running" or not status.get("activated_until"))
+            ):
                 logger.warning(
                     "Обнаружен запущенный контейнер '%s' без активной активации через API sydafa. Немедленная остановка.",
                     cname,
