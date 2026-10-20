@@ -44,6 +44,15 @@ class TestContainerNames(unittest.TestCase):
             self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
             self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
 
+    def test_build_connection_details_respects_container_prefix(self):
+        from app.container_manager import build_connection_details
+
+        cfg = SourceConfig(name="bank", type="mssql", host="sydafa-src-mssql-bank", port=1433)
+        with patch("app.container_manager.CONTAINER_PREFIX", "test-"):
+            conn = build_connection_details("bank", cfg)
+            self.assertEqual(conn.host, "sydafa-test-src-mssql-bank")
+            self.assertIn("sydafa-test-src-mssql-bank", conn.jdbc_url)
+
 
 if __name__ == "__main__":
     unittest.main()
