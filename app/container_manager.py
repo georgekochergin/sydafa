@@ -134,7 +134,7 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     return
                 except Exception as e:
                     last_err = e
-                    if not is_init:
+                    try:
                         conn = pymssql.connect(
                             server=db_host,
                             port=config.port,
@@ -145,6 +145,8 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                         )
                         conn.close()
                         return
+                    except Exception as sa_err:
+                        last_err = sa_err
             elif config.type == "oracle":
                 import oracledb
                 try:
@@ -154,15 +156,8 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                     return
                 except Exception as e:
                     last_err = e
-                    if not is_init:
+                    try:
                         dsn = oracledb.makedsn(db_host, config.port, service_name="FREE")
-                    conn = oracledb.connect(user=secrets.dba_user, password=secrets.dba_password, dsn=dsn)
-                    conn.close()
-                    return
-                except Exception as e:
-                    last_err = e
-                    if not is_init:
-                        dsn = oracledb.makedsn(config.host, config.port, service_name="FREE")
                         conn = oracledb.connect(
                             user="SYS",
                             password=secrets.oracle_sys_password,
@@ -175,6 +170,8 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                         conn.close()
                         if row and row[0] == "READ WRITE":
                             return
+                    except Exception as sys_err:
+                        last_err = sys_err
             else:
                 raise ValueError(f"Неизвестный тип СУБД '{config.type}'")
         except Exception as e:
