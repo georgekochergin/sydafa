@@ -5,6 +5,7 @@ import logging
 from contextlib import contextmanager
 
 from .constants import SYDAFA_DB, SYDAFA_USER
+from .container_manager import container_name_for
 from .secrets import get_secrets
 from .sources import get_source
 
@@ -19,9 +20,10 @@ def mssql_connection(source_name: str = "mssql", database: str | None = None, au
     secrets = get_secrets()
     dba_user = secrets.dba_user
     password = secrets.dba_password
+    db_host = container_name_for(cfg)
     try:
         conn = pymssql.connect(
-            server=cfg.host,
+            server=db_host,
             port=cfg.port,
             user=dba_user,
             password=password,
@@ -44,7 +46,8 @@ def oracle_connection(source_name: str = "oracle", service_name: str | None = No
     import oracledb
     cfg = get_source(source_name)
     target_service = service_name or SYDAFA_DB
-    dsn = oracledb.makedsn(cfg.host, cfg.port, service_name=target_service)
+    db_host = container_name_for(cfg)
+    dsn = oracledb.makedsn(db_host, cfg.port, service_name=target_service)
     secrets = get_secrets()
     dba_user = secrets.dba_user
     password = secrets.dba_password
