@@ -5,12 +5,21 @@ import sys
 import unittest
 from pathlib import Path
 
-# Добавляем путь к integrations/airflow в sys.path для импорта
-airflow_pkg_dir = Path(__file__).resolve().parent.parent / "integrations" / "airflow"
-if str(airflow_pkg_dir) not in sys.path:
-    sys.path.insert(0, str(airflow_pkg_dir))
+# Ищем путь к integrations/airflow относительно корня репозитория или в образе
+candidates = [
+    Path(__file__).resolve().parent.parent / "integrations" / "airflow",
+    Path("/app/integrations/airflow"),
+]
+has_airflow_pkg = False
+for c in candidates:
+    if c.is_dir():
+        if str(c) not in sys.path:
+            sys.path.insert(0, str(c))
+        has_airflow_pkg = True
+        break
 
 
+@unittest.skipUnless(has_airflow_pkg, "Пакет integrations/airflow не найден в окружении")
 class TestAirflowProvider(unittest.TestCase):
     def test_get_provider_info_structure(self):
         import sydafa_airflow
