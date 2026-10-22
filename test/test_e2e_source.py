@@ -152,7 +152,7 @@ def run_source_e2e(base_url: str, source: str):
             "primary_key": ["item_id"],
             "columns": [
                 {"name": "item_id", "type": "bigint", "generator": {"kind": "sequence"}},
-                {"name": "cat_id", "type": "bigint", "generator": None},
+                {"name": "cat_id"},
                 {"name": "title", "type": "string", "generator": {"kind": "faker", "provider": "company"}},
                 {"name": "price", "type": "decimal(10,2)", "generator": {"kind": "random_decimal", "min": 10, "max": 500}},
             ],

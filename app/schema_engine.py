@@ -183,6 +183,35 @@ def _build_ddl_and_update_state(
         filtered_cols = [c for c in op.columns if c.name not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
         filtered_pk = [k for k in op.primary_key if k not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
 
+        # Резолвинг и принудительное наследование типов колонок из родительских таблиц Foreign Keys
+        fk_map: dict[str, tuple[str, str]] = {}
+        for fk in op.foreign_keys:
+            ref_fqn = fk.ref_entity_fqn
+            if ref_fqn not in live.tables:
+                raise SchemaEvolutionError(
+                    step_index, op.op, f"Родительская таблица '{ref_fqn}' для Foreign Key не найдена в схеме"
+                )
+            parent_table = live.tables[ref_fqn]
+            parent_col_map = {c.name: c for c in parent_table.columns}
+            for idx, col_name in enumerate(fk.columns):
+                ref_col_name = fk.ref_columns[idx]
+                if ref_col_name not in parent_col_map:
+                    raise SchemaEvolutionError(
+                        step_index, op.op, f"Колонка '{ref_col_name}' не найдена в родительской таблице '{ref_fqn}'"
+                    )
+                fk_map[col_name] = (ref_fqn, parent_col_map[ref_col_name].type)
+
+        for c in filtered_cols:
+            if c.name in fk_map:
+                # Принудительно выставляем тип родительской колонки
+                _, parent_type = fk_map[c.name]
+                c.type = parent_type
+            else:
+                if not c.type:
+                    raise SchemaEvolutionError(
+                        step_index, op.op, f"Колонка '{c.name}' таблицы '{key}' не входит в foreign_keys и обязана иметь 'type'"
+                    )
+
         # Валидация первичного ключа
         if filtered_pk:
             col_map = {c.name: c for c in filtered_cols}
@@ -192,7 +221,7 @@ def _build_ddl_and_update_state(
                         step_index, op.op, f"Колонка первичного ключа '{pk_col}' не найдена в таблице '{key}'"
                     )
 
-            fk_col_names = {c for fk in op.foreign_keys for c in fk.columns}
+            fk_col_names = set(fk_map.keys())
             has_unique_col = any(
                 getattr(getattr(col_map[c], "generator", None), "kind", None) in ("sequence", "uuid")
                 for c in filtered_pk

@@ -54,11 +54,18 @@ class TestRulesAndMigrate(unittest.TestCase):
             "tables": {
                 "core.accounts": {
                     "primary_key": ["account_id"],
-                    "columns": {"account_id": "bigint", "name": "string"},
+                    "columns": {
+                        "account_id": {"type": "bigint"},
+                        "name": {"type": "string"},
+                    },
                 },
                 "core.transactions": {
                     "primary_key": ["tx_id"],
-                    "columns": {"tx_id": "bigint", "account_id": "bigint", "amount": "decimal(12,2)"},
+                    "columns": {
+                        "tx_id": {"type": "bigint"},
+                        "account_id": {},
+                        "amount": {"type": "decimal(12,2)"},
+                    },
                     "foreign_keys": [
                         {
                             "columns": ["account_id"],
@@ -73,6 +80,10 @@ class TestRulesAndMigrate(unittest.TestCase):
         ops = compile_schema_decl_to_operations(schema_data)
         self.assertEqual(len(ops), 3)  # create_schema + create_table accounts + create_table transactions
         self.assertEqual(ops[0].op, "create_schema")
+        tx_op = ops[2]
+        self.assertEqual(tx_op.entity_fqn, "core.transactions")
+        account_id_col = next(c for c in tx_op.columns if c.name == "account_id")
+        self.assertIsNone(account_id_col.type)  # Тип будет унаследован при создании таблицы в СУБД
         self.assertEqual(ops[0].name, "core")
 
         # Таблица accounts должна идти ДО transactions из-за Foreign Key!

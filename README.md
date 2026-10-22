@@ -122,9 +122,9 @@ flowchart TD
               "customer_id"
             ],
             "columns": {
-              "customer_id": "bigint",
-              "name": "string",
-              "segment": "string"
+              "customer_id": { "type": "bigint" },
+              "name": { "type": "string" },
+              "segment": { "type": "string" }
             },
             "foreign_keys": []
           }
@@ -552,8 +552,8 @@ services:
   "entity_fqn": "demo.orders",
   "primary_key": ["order_id"],
   "columns": [
-    {"name": "order_id", "type": "bigint"},
-    {"name": "customer_id", "type": "bigint"},
+    {"name": "order_id", "type": "bigint", "generator": {"kind": "sequence"}},
+    {"name": "customer_id"},
     {"name": "amount", "type": "decimal(18,2)"},
     {"name": "order_date", "type": "date"}
   ],
@@ -566,6 +566,11 @@ services:
   ]
 }
 ```
+> **Автоматическое наследование типов для Foreign Key (`foreign_keys`):**
+> - Колонки, входящие в `foreign_keys` (например, `customer_id`), наследуют точный тип данных из родительской таблицы (`demo.customers.customer_id`).
+> - Для FK-колонок поле `type` в `columns` можно не указывать. Если тип указан, он принудительно заменяется типом родительской колонки.
+> - Порядок колонок в массиве `columns` строго определяет физический порядок колонок (`ORDINAL_POSITION`) при создании таблицы в СУБД.
+> - Не-FK колонки обязаны содержать явный `type`. В `sources.json` секция `columns` задаётся словарём словарей (`"columns": { "customer_id": {}, "amount": {"type": "decimal(18,2)"} }`).
 
 #### `drop_table`
 Удаление таблицы из схемы:

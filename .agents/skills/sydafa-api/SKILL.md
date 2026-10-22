@@ -82,7 +82,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 | `create_schema` | `name` | Создание новой схемы в базе |
 | `drop_schema` | `name` | Удаление пустой схемы (ошибка, если в ней есть таблицы) |
 | `rename_schema` | `from_name`, `to_name` | Переименование схемы с переносом таблиц |
-| `create_table` | `entity_fqn`, `primary_key`, `columns`, `foreign_keys` (с `ref_entity_fqn`) | Создание таблицы с типами данных |
+| `create_table` | `entity_fqn`, `primary_key`, `columns`, `foreign_keys` (с `ref_entity_fqn`) | Создание таблицы (для колонок FK тип указывать не требуется — автоматически наследуется от родителя) |
 | `drop_table` | `entity_fqn` | Удаление таблицы (каскадный drop constraints) |
 | `rename_table` | `entity_fqn`, `to_name` | Переименование таблицы внутри схемы |
 | `transfer_table` | `entity_fqn`, `to_schema` | Перенос таблицы в другую схему |
@@ -151,7 +151,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
       "entity_fqn": "core.accounts",
       "primary_key": ["id"],
       "columns": [
-        {"name": "id", "type": "bigint"},
+        {"name": "id", "type": "bigint", "generator": {"kind": "sequence"}},
         {"name": "balance", "type": "decimal(18,2)"}
       ],
       "foreign_keys": []

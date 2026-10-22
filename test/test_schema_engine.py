@@ -12,6 +12,7 @@ from app.models import (
     DropSchemaOp,
     DropTableOp,
     EXEC_BATCH_ID_COLUMN,
+    ForeignKey,
     LiveSchema,
     RenameColumnOp,
     RenameSchemaOp,
@@ -211,6 +212,93 @@ class TestSchemaEngine(unittest.TestCase):
         )
         ddl, desc = _build_ddl_and_update_state(seq_table_op, "mssql", self.live, 4)
         self.assertIn("demo.orders", self.live.tables)
+
+    def test_fk_column_type_inheritance_and_order(self):
+        """FK-колонка без типа автоматически наследует тип из родительской таблицы, сохраняя порядок."""
+        self.live.schemas = ["demo"]
+        parent_op = CreateTableOp(
+            entity_fqn="demo.parents",
+            primary_key=["parent_id"],
+            columns=[
+                ColumnSpec(name="parent_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="name", type="string"),
+            ],
+        )
+        _build_ddl_and_update_state(parent_op, "mssql", self.live, 1)
+
+        # Дочерняя таблица: parent_id идет ПЕРВОЙ, type не указан
+        child_op = CreateTableOp(
+            entity_fqn="demo.children",
+            primary_key=["parent_id", "child_seq"],
+            columns=[
+                ColumnSpec(name="parent_id"),  # type отсутствует!
+                ColumnSpec(name="child_seq", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="note", type="string"),
+            ],
+            foreign_keys=[
+                ForeignKey(columns=["parent_id"], ref_entity_fqn="demo.parents", ref_columns=["parent_id"])
+            ],
+        )
+        ddl, desc = _build_ddl_and_update_state(child_op, "mssql", self.live, 2)
+        child_table = self.live.tables["demo.children"]
+
+        # 1. Тип parent_id унаследован из родителя
+        parent_id_col = next(c for c in child_table.columns if c.name == "parent_id")
+        self.assertEqual(parent_id_col.type, "bigint")
+
+        # 2. Порядок колонок строго сохранен
+        self.assertEqual(
+            [c.name for c in child_table.columns],
+            ["parent_id", "child_seq", "note", "_batch_id"]
+        )
+
+        # 3. В DDL присутствует правильный тип BIGINT для parent_id
+        create_sql = next(stmt for stmt in ddl if "CREATE TABLE [demo].[children]" in stmt)
+        self.assertIn("[parent_id] BIGINT", create_sql)
+
+    def test_fk_column_overwrites_wrong_type(self):
+        """Даже если для FK-колонки указан неверный тип, он принудительно заменяется типом родителя."""
+        self.live.schemas = ["demo"]
+        parent_op = CreateTableOp(
+            entity_fqn="demo.departments",
+            primary_key=["dept_id"],
+            columns=[
+                ColumnSpec(name="dept_id", type="bigint", generator={"kind": "sequence"}),
+            ],
+        )
+        _build_ddl_and_update_state(parent_op, "mssql", self.live, 1)
+
+        # Ошибочно указан type="string" для FK dept_id
+        emp_op = CreateTableOp(
+            entity_fqn="demo.employees",
+            primary_key=["emp_id"],
+            columns=[
+                ColumnSpec(name="emp_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="dept_id", type="string"),  # Противоречит родителю!
+            ],
+            foreign_keys=[
+                ForeignKey(columns=["dept_id"], ref_entity_fqn="demo.departments", ref_columns=["dept_id"])
+            ],
+        )
+        _build_ddl_and_update_state(emp_op, "mssql", self.live, 2)
+        emp_table = self.live.tables["demo.employees"]
+        dept_id_col = next(c for c in emp_table.columns if c.name == "dept_id")
+        self.assertEqual(dept_id_col.type, "bigint")
+
+    def test_non_fk_column_missing_type_raises_error(self):
+        """Если колонка не входит в FK и не имеет типа, создание таблицы отклоняется."""
+        self.live.schemas = ["demo"]
+        bad_col_op = CreateTableOp(
+            entity_fqn="demo.invalid",
+            primary_key=["id"],
+            columns=[
+                ColumnSpec(name="id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="missing_type_col"),  # без типа и не FK
+            ],
+        )
+        with self.assertRaises(SchemaEvolutionError) as ctx:
+            _build_ddl_and_update_state(bad_col_op, "mssql", self.live, 1)
+        self.assertIn("обязана иметь 'type'", str(ctx.exception))
 
 
 if __name__ == "__main__":

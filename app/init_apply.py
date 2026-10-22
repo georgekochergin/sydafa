@@ -282,8 +282,16 @@ def compile_schema_decl_to_operations(
         )
         col_specs: list[ColumnSpec] = []
         if isinstance(raw_cols, dict):
-            for col_name, col_type in raw_cols.items():
-                gen = t_rules.get(col_name)
+            for col_name, col_info in raw_cols.items():
+                if isinstance(col_info, dict):
+                    col_type = col_info.get("type")
+                    gen = col_info.get("generator") or t_rules.get(col_name)
+                elif hasattr(col_info, "type"):
+                    col_type = getattr(col_info, "type", None)
+                    gen = getattr(col_info, "generator", None) or t_rules.get(col_name)
+                else:
+                    col_type = None
+                    gen = t_rules.get(col_name)
                 col_specs.append(ColumnSpec(name=col_name, type=col_type, generator=gen))
         elif isinstance(raw_cols, list):
             for c in raw_cols:
