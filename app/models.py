@@ -36,6 +36,10 @@ class SequenceGenerator(BaseGenerator):
     kind: Literal["sequence"] = "sequence"
 
 
+class UuidGenerator(BaseGenerator):
+    kind: Literal["uuid"] = "uuid"
+
+
 class FakerGenerator(BaseGenerator):
     kind: Literal["faker"] = "faker"
     provider: str = Field(default="word", description="Метод Faker: company, name, word, address, email")
@@ -89,6 +93,7 @@ class DateOffsetGenerator(BaseGenerator):
 GeneratorSpec = Annotated[
     Union[
         SequenceGenerator,
+        UuidGenerator,
         FakerGenerator,
         ChoiceGenerator,
         RandomDecimalGenerator,
@@ -129,7 +134,8 @@ class ColumnSpec(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
-    type: str
+    type: str | None = None
+    generator: GeneratorSpec | None = None
 
     @field_validator("name")
     @classmethod
@@ -411,7 +417,6 @@ class TruncateOp(EntityFqnOpMixin):
 class AppendOp(EntityFqnOpMixin):
     op: Literal["append"] = "append"
     rows: int = Field(default=1, gt=0, le=100_000)
-    new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class UpdateOp(EntityFqnOpMixin):
@@ -467,13 +472,20 @@ ExecResult = MigrateResult
 
 # --- Декларативные модели sources.json ---
 
+class ColumnDeclSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str | None = None
+    generator: GeneratorSpec | None = None
+
+
 class TableDeclSpec(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     primary_key: list[str] = Field(default_factory=list)
-    columns: dict[str, str] = Field(
+    columns: dict[str, ColumnDeclSpec] = Field(
         default_factory=dict,
-        description="Маппинг имя колонки -> SQL тип (например, 'amount': 'decimal(15,2)')",
+        description="Маппинг имя колонки -> ColumnDeclSpec (словарь спецификации, для FK пустой словарь {})",
     )
     foreign_keys: list[ForeignKey] = Field(default_factory=list)
 
@@ -501,7 +513,6 @@ class SourceManifestSpec(BaseModel):
 
 class AppendRequest(BaseModel):
     rows: int = Field(gt=0, le=100_000)
-    new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class UpdateRequest(BaseModel):

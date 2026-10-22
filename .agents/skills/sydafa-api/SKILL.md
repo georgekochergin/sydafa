@@ -11,7 +11,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 > **Единая точка правды (Single Source of Truth):**
 > Каноническая проектная документация, полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
-> параметров генераторов (`sequence`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`),
+> параметров генераторов (`sequence`, `uuid`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`),
 > поведения таблиц аудита (`_upd_`, `_del_`) и правил валидации зафиксированы в основном файле проекта: [README.md](../../../README.md) (Раздел 7 «Транзакционная эволюция схем и управление данными (`POST /sources/{source}/migrate`)»).
 > Настоящий скилл ссылается на `README.md` и служит исключительно для быстрой сборки JSON-спецификаций из текста.
 
@@ -82,7 +82,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 | `create_schema` | `name` | Создание новой схемы в базе |
 | `drop_schema` | `name` | Удаление пустой схемы (ошибка, если в ней есть таблицы) |
 | `rename_schema` | `from_name`, `to_name` | Переименование схемы с переносом таблиц |
-| `create_table` | `entity_fqn`, `primary_key`, `columns`, `foreign_keys` (с `ref_entity_fqn`) | Создание таблицы с типами данных |
+| `create_table` | `entity_fqn`, `primary_key`, `columns`, `foreign_keys` (с `ref_entity_fqn`) | Создание таблицы (для колонок FK тип указывать не требуется — автоматически наследуется от родителя) |
 | `drop_table` | `entity_fqn` | Удаление таблицы (каскадный drop constraints) |
 | `rename_table` | `entity_fqn`, `to_name` | Переименование таблицы внутри схемы |
 | `transfer_table` | `entity_fqn`, `to_schema` | Перенос таблицы в другую схему |
@@ -95,7 +95,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 | Операция (`op`) | Обязательные поля | Опциональные поля | Назначение |
 |---|---|---|---|
 | `truncate` | `entity_fqn` | `cascade` (bool) | Очистка таблицы |
-| `append` | `entity_fqn`, `rows` | `new_key_ratio` (float, def 0.1) | Синтетическое наполнение по генераторам колонок. `new_key_ratio` задает вероятность генерации новой строки в родительской таблице FK (при пустом родителе — всегда создается; при 0.0 — только существующие ключи; при 0.01 — ~1% новых родителей; при 1.0 — 100% новых) |
+| `append` | `entity_fqn`, `rows` | — | Синтетическое наполнение по генераторам колонок (значения FK берутся исключительно из существующих строк родителя) |
 | `update` | `entity_fqn`, `set` | `predicate` (list), `limit` (int) | Обновление строк по предикату и/или не более N случайных строк |
 | `delete` | `entity_fqn` | `predicate` (list), `cascade` (bool), `limit` (int) | Удаление строк по предикату и/или не более N случайных строк |
 
@@ -151,12 +151,12 @@ description: Use when the user asks to generate JSON request bodies for the syda
       "entity_fqn": "core.accounts",
       "primary_key": ["id"],
       "columns": [
-        {"name": "id", "type": "bigint"},
+        {"name": "id", "type": "bigint", "generator": {"kind": "sequence"}},
         {"name": "balance", "type": "decimal(18,2)"}
       ],
       "foreign_keys": []
     },
-    {"op": "append", "entity_fqn": "core.accounts", "rows": 50, "new_key_ratio": 0.0},
+    {"op": "append", "entity_fqn": "core.accounts", "rows": 50},
     {"op": "rename_column", "entity_fqn": "core.accounts", "from_name": "balance", "to_name": "amount"}
   ]
 }

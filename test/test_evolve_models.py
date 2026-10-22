@@ -27,6 +27,7 @@ from app.models import (
     SourceConfig,
     TransferTableOp,
     UpdateRequest,
+    UuidGenerator,
 )
 
 
@@ -44,6 +45,9 @@ class TestEvolveModels(unittest.TestCase):
     def test_generators_validation(self):
         seq = SequenceGenerator()
         self.assertEqual(seq.kind, "sequence")
+
+        u = UuidGenerator()
+        self.assertEqual(u.kind, "uuid")
 
         fk = FakerGenerator(provider="company")
         self.assertEqual(fk.provider, "company")
@@ -150,7 +154,7 @@ class TestEvolveModels(unittest.TestCase):
             RenameColumnOp(entity_fqn="demo.customers", from_name="col", to_name="bad-col")
 
     def test_dml_models(self):
-        append_req = AppendRequest(rows=10, new_key_ratio=0.5)
+        append_req = AppendRequest(rows=10)
         self.assertEqual(append_req.rows, 10)
 
         update_req = UpdateRequest(

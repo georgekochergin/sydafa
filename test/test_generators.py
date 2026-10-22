@@ -19,12 +19,14 @@ from app.models import (
     CumulativeBalanceInvariant,
     DateOffsetGenerator,
     FakerGenerator,
+    ForeignKey,
     LiveSchema,
     RandomDateGenerator,
     RandomDecimalGenerator,
     SequenceGenerator,
     TableRuleProfile,
     TableSchema,
+    UuidGenerator,
 )
 
 
@@ -186,13 +188,10 @@ class TestGenerators(unittest.TestCase):
         conn = FakeConn()
         session = GenerationSession(conn, "mssql", live, table, profile)
 
-        _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+        _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
 
-        self.assertEqual(len(conn.cur.executed), 2)
-        select_sql, _ = conn.cur.executed[0]
-        self.assertIn("SELECT MAX", select_sql)
-
-        insert_sql, params = conn.cur.executed[1]
+        self.assertEqual(len(conn.cur.executed), 1)
+        insert_sql, params = conn.cur.executed[0]
         self.assertIn("INSERT INTO", insert_sql)
 
         cols_part = insert_sql.split("(")[1].split(")")[0]
@@ -233,7 +232,7 @@ class TestGenerators(unittest.TestCase):
         session = GenerationSession(conn, "mssql", live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
         self.assertIn("циклическая", str(ctx.exception).lower())
 
     def test_dag_unknown_ref_column(self):
@@ -260,7 +259,7 @@ class TestGenerators(unittest.TestCase):
         session = GenerationSession(conn, "mssql", live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
         self.assertIn("неизвестную ref_column", str(ctx.exception))
 
     def test_cumulative_balance_invariant(self):
@@ -299,7 +298,7 @@ class TestGenerators(unittest.TestCase):
 
         running_balances = {1: 0.0, 2: 0.0}
         for _ in range(50):
-            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
@@ -344,7 +343,7 @@ class TestGenerators(unittest.TestCase):
 
         global_balance = 0.0
         for _ in range(30):
-            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
@@ -396,10 +395,222 @@ class TestGenerators(unittest.TestCase):
 
         # Все первые транзакции ОБЯЗАНЫ быть пополнениями (> 0), пока баланс не выйдет из дефицита!
         for _ in range(3):
-            _mint_new_row(conn, "test_src", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
+            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
             amt = float(row_dict["amount"])
 
             self.assertGreater(amt, 0.0, "При отрицательном остатке списания должны быть заблокированы!")
+
+    def test_monotonic_sequence_no_sql_read_and_no_resurrection(self):
+        """Проверка строгой монотонности сиквенса без SQL SELECT MAX и отсутствия переиспользования ID."""
+        from app.generators import append_rows_conn
+        from app import schema_state
+
+        source = "test_seq_src"
+        schema_state.reset_memory_cache(source)
+
+        table = TableSchema(
+            name="orders",
+            schema="dbo",
+            primary_key=["order_id"],
+            columns=[
+                ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="title", type="string"),
+            ],
+            foreign_keys=[],
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.orders": table})
+        conn = FakeConn()
+
+        # Первый батч: 3 строки
+        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=3, batch_id=1)
+
+        # Проверяем, что не было ни одного SELECT MAX
+        for sql, _ in conn.cur.executed:
+            self.assertNotIn("SELECT MAX", sql)
+
+        # Проверяем значения order_id: 1, 2, 3
+        executed_inserts = [e for e in conn.cur.executed if "INSERT INTO" in e[0]]
+        self.assertEqual(len(executed_inserts), 3)
+
+        ids_batch1 = []
+        for insert_sql, params in executed_inserts:
+            cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+            row_dict = dict(zip(cols, params))
+            ids_batch1.append(row_dict["order_id"])
+        self.assertEqual(ids_batch1, [1, 2, 3])
+
+        # Второй батч: 2 строки (имитируем, что строки 2 и 3 могли быть удалены в БД)
+        conn.cur.executed.clear()
+        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=2, batch_id=2)
+
+        # Новые строки обязаны получить 4 и 5 (никакого возврата к 2 или 3)
+        ids_batch2 = []
+        for insert_sql, params in conn.cur.executed:
+            if "INSERT INTO" in insert_sql:
+                cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+                row_dict = dict(zip(cols, params))
+                ids_batch2.append(row_dict["order_id"])
+        self.assertEqual(ids_batch2, [4, 5])
+
+        schema_state.reset_memory_cache(source)
+
+    def test_sequence_generator_on_non_pk_column(self):
+        """Генератор kind=sequence корректно работает на не-PK колонках."""
+        from app.generators import append_rows_conn
+        from app import schema_state, rules_state
+
+        source = "test_seq_non_pk"
+        schema_state.reset_memory_cache(source)
+
+        table = TableSchema(
+            name="docs",
+            schema="dbo",
+            primary_key=["doc_id"],
+            columns=[
+                ColumnSpec(name="doc_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="reg_number", type="bigint"),
+            ],
+            foreign_keys=[],
+        )
+        rules_state.set_table_rules(
+            source,
+            "dbo.docs",
+            TableRuleProfile(columns={"reg_number": SequenceGenerator()}),
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.docs": table})
+        conn = FakeConn()
+
+        append_rows_conn(conn, source, "mssql", live, "dbo", "docs", rows=3, batch_id=1)
+
+        reg_numbers = []
+        doc_ids = []
+        for insert_sql, params in conn.cur.executed:
+            if "INSERT INTO" in insert_sql:
+                cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+                row_dict = dict(zip(cols, params))
+                doc_ids.append(row_dict["doc_id"])
+                reg_numbers.append(row_dict["reg_number"])
+
+        self.assertEqual(doc_ids, [1, 2, 3])
+        self.assertEqual(reg_numbers, [1, 2, 3])
+
+        schema_state.reset_memory_cache(source)
+
+    def test_uuid_generator(self):
+        """Генератор uuid возвращает валидную строку UUIDv4."""
+        import uuid as uuid_lib
+        val = _generate_value("id_col", gen=UuidGenerator(), col_type="string")
+        self.assertIsInstance(val, str)
+        parsed = uuid_lib.UUID(val)
+        self.assertEqual(parsed.version, 4)
+
+        # Автоматическая генерация для колонки типа uuid без явного генератора
+        val_auto = _generate_value("uuid_col", gen=None, col_type="uuid")
+        self.assertIsInstance(val_auto, str)
+        parsed_auto = uuid_lib.UUID(val_auto)
+        self.assertEqual(parsed_auto.version, 4)
+
+    def test_fk_empty_parent_raises_generator_error(self):
+        """Попытка append в дочернюю таблицу при пустом родителе падает с GeneratorError."""
+        from app.generators import append_rows_conn
+        from app import schema_state
+
+        source = "test_fk_empty"
+        schema_state.reset_memory_cache(source)
+
+        parent = TableSchema(
+            name="orders",
+            schema="dbo",
+            primary_key=["order_id"],
+            columns=[ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"})],
+            foreign_keys=[],
+        )
+        child = TableSchema(
+            name="order_items",
+            schema="dbo",
+            primary_key=["order_id", "item_seq"],
+            columns=[
+                ColumnSpec(name="order_id", type="bigint"),
+                ColumnSpec(name="item_seq", type="bigint", generator={"kind": "sequence"}),
+            ],
+            foreign_keys=[
+                ForeignKey(
+                    columns=["order_id"],
+                    ref_entity_fqn="dbo.orders",
+                    ref_columns=["order_id"],
+                )
+            ],
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.orders": parent, "dbo.order_items": child})
+        conn = FakeConn()  # fetchall() возвращает [], т.е. родитель пуст
+
+        with self.assertRaises(GeneratorError) as ctx:
+            append_rows_conn(conn, source, "mssql", live, "dbo", "order_items", rows=1, batch_id=1)
+
+        self.assertIn("пуста", str(ctx.exception))
+        self.assertIn("orders", str(ctx.exception))
+        schema_state.reset_memory_cache(source)
+
+    def test_composite_pk_fk_plus_sequence(self):
+        """Составной PK [order_id (FK), item_seq (sequence)] корректно наполняется."""
+        from app.generators import append_rows_conn
+        from app import schema_state
+
+        source = "test_composite_pk"
+        schema_state.reset_memory_cache(source)
+
+        parent = TableSchema(
+            name="orders",
+            schema="dbo",
+            primary_key=["order_id"],
+            columns=[ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"})],
+            foreign_keys=[],
+        )
+        child = TableSchema(
+            name="order_items",
+            schema="dbo",
+            primary_key=["order_id", "item_seq"],
+            columns=[
+                ColumnSpec(name="order_id", type="bigint"),
+                ColumnSpec(name="item_seq", type="bigint", generator={"kind": "sequence"}),
+            ],
+            foreign_keys=[
+                ForeignKey(
+                    columns=["order_id"],
+                    ref_entity_fqn="dbo.orders",
+                    ref_columns=["order_id"],
+                )
+            ],
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.orders": parent, "dbo.order_items": child})
+
+        # Создаем соединение, где родитель возвращает строку с order_id = 100
+        class PopulatedParentConn(FakeConn):
+            def __init__(self):
+                super().__init__()
+            def cursor(self):
+                cur = super().cursor()
+                cur.fetchall = lambda: [(100,)]
+                return cur
+
+        conn = PopulatedParentConn()
+        append_rows_conn(conn, source, "mssql", live, "dbo", "order_items", rows=2, batch_id=1)
+
+        inserts = [e for e in conn.cur.executed if "INSERT INTO" in e[0]]
+        self.assertEqual(len(inserts), 2)
+
+        row1 = dict(zip([c.strip("[]\"") for c in inserts[0][0].split("(")[1].split(")")[0].split(", ")], inserts[0][1]))
+        row2 = dict(zip([c.strip("[]\"") for c in inserts[1][0].split("(")[1].split(")")[0].split(", ")], inserts[1][1]))
+
+        # order_id взят из родителя (100)
+        self.assertEqual(row1["order_id"], 100)
+        self.assertEqual(row2["order_id"], 100)
+        # item_seq сгенерирован как монотонный сиквенс (1, 2)
+        self.assertEqual(row1["item_seq"], 1)
+        self.assertEqual(row2["item_seq"], 2)
+
+        schema_state.reset_memory_cache(source)
+

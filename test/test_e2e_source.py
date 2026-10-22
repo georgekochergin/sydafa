@@ -152,7 +152,7 @@ def run_source_e2e(base_url: str, source: str):
             "primary_key": ["item_id"],
             "columns": [
                 {"name": "item_id", "type": "bigint", "generator": {"kind": "sequence"}},
-                {"name": "cat_id", "type": "bigint", "generator": None},
+                {"name": "cat_id"},
                 {"name": "title", "type": "string", "generator": {"kind": "faker", "provider": "company"}},
                 {"name": "price", "type": "decimal(10,2)", "generator": {"kind": "random_decimal", "min": 10, "max": 500}},
             ],
@@ -177,10 +177,15 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: _upd_categories exists", f"{schema_name}._upd_categories" in tables_meta, True)
     check(f"{source}: _del_categories exists", f"{schema_name}._del_categories" in tables_meta, True)
 
-    # 4. DML: Наполнение данными (append) с FK связями
+    # 4. DML: Попытка append в дочернюю таблицу при пустом родителе -> 409
+    bad_fk_append = [{"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 1}]
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_fk_append})
+    check(f"{source}: append child with empty parent -> 409", code, 409)
+
+    # 4.1. DML: Наполнение данными (append) с FK связями в правильном порядке
     append_ops = [
-        {"op": "append", "entity_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
-        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
+        {"op": "append", "entity_fqn": f"{schema_name}.categories", "rows": 3},
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 5},
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
@@ -256,6 +261,16 @@ def run_source_e2e(base_url: str, source: str):
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": random_delete_ops})
     check(f"{source}: exec random_rows delete", code, 200)
+
+    # 6.4. Проверка строго монотонного роста сиквенса после delete (нет "возрождения" старых ключей)
+    post_delete_append_ops = [
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 2}
+    ]
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": post_delete_append_ops})
+    check(f"{source}: exec append after delete", code, 200)
+    if prefix:
+        new_ids_count = scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, 'items')} WHERE {_col(source, 'item_id')} IN (6, 7)")
+        check(f"{source}: post-delete appended rows got monotonic IDs 6 and 7", new_ids_count, "2")
 
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409

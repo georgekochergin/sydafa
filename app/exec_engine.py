@@ -30,6 +30,7 @@ from .schema_state import (
     get_live_schema,
     get_next_batch_id,
     save_live_schema,
+    sync_sequences_after_operations,
 )
 from .sources import get_source
 
@@ -74,7 +75,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 elif isinstance(op, AppendOp):
                     inserted = append_rows_conn(
-                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, op.new_key_ratio, current_batch_id
+                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, current_batch_id
                     )
                     applied_records.append({
                         "step": step_idx,
@@ -165,6 +166,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
     # Сохраняем обновленную схему
     save_live_schema(source_name, live)
+    sync_sequences_after_operations(source_name, operations)
 
     # Логируем в историю эволюции
     log_entry = {

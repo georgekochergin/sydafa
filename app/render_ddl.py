@@ -9,6 +9,7 @@ _MSSQL_TYPES = {
     "string": "NVARCHAR(400)",
     "date": "DATE",
     "timestamp": "DATETIME2",
+    "uuid": "UNIQUEIDENTIFIER",
 }
 
 _ORACLE_TYPES = {
@@ -16,6 +17,7 @@ _ORACLE_TYPES = {
     "string": "VARCHAR2(400)",
     "date": "DATE",
     "timestamp": "TIMESTAMP",
+    "uuid": "VARCHAR2(36)",
 }
 
 _DECIMAL_RE = re.compile(r"^decimal\((\d+),\s*(\d+)\)$")
