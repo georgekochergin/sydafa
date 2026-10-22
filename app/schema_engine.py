@@ -182,6 +182,31 @@ def _build_ddl_and_update_state(
         # Игнорируем пользовательские попытки объявить системные колонки _batch_id или _exec_batch_id
         filtered_cols = [c for c in op.columns if c.name not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
         filtered_pk = [k for k in op.primary_key if k not in (BATCH_ID_COLUMN, EXEC_BATCH_ID_COLUMN)]
+
+        # Валидация первичного ключа
+        if filtered_pk:
+            col_map = {c.name: c for c in filtered_cols}
+            for pk_col in filtered_pk:
+                if pk_col not in col_map:
+                    raise SchemaEvolutionError(
+                        step_index, op.op, f"Колонка первичного ключа '{pk_col}' не найдена в таблице '{key}'"
+                    )
+
+            fk_col_names = {c for fk in op.foreign_keys for c in fk.columns}
+            has_unique_col = any(
+                "uuid" in col_map[c].type.lower()
+                or (any(t in col_map[c].type.lower() for t in ("int", "bigint", "smallint", "tinyint")) and c not in fk_col_names)
+                or getattr(getattr(col_map[c], "generator", None), "kind", None) in ("sequence", "uuid")
+                for c in filtered_pk
+            )
+            all_are_fk = all(c in fk_col_names for c in filtered_pk)
+            if not has_unique_col and not all_are_fk:
+                raise SchemaEvolutionError(
+                    step_index,
+                    op.op,
+                    f"Primary key таблицы '{key}' должен включать хотя бы одну уникальную колонку ('sequence' или 'uuid') либо состоять из внешних ключей",
+                )
+
         # Системно внедряем обязательную колонку _batch_id
         filtered_cols.append(ColumnSpec(name=BATCH_ID_COLUMN, type="bigint"))
 

@@ -177,10 +177,15 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: _upd_categories exists", f"{schema_name}._upd_categories" in tables_meta, True)
     check(f"{source}: _del_categories exists", f"{schema_name}._del_categories" in tables_meta, True)
 
-    # 4. DML: Наполнение данными (append) с FK связями
+    # 4. DML: Попытка append в дочернюю таблицу при пустом родителе -> 409
+    bad_fk_append = [{"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 1}]
+    code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_fk_append})
+    check(f"{source}: append child with empty parent -> 409", code, 409)
+
+    # 4.1. DML: Наполнение данными (append) с FK связями в правильном порядке
     append_ops = [
-        {"op": "append", "entity_fqn": f"{schema_name}.categories", "rows": 3, "new_key_ratio": 0.0},
-        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 5, "new_key_ratio": 0.0},
+        {"op": "append", "entity_fqn": f"{schema_name}.categories", "rows": 3},
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 5},
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
@@ -259,7 +264,7 @@ def run_source_e2e(base_url: str, source: str):
 
     # 6.4. Проверка строго монотонного роста сиквенса после delete (нет "возрождения" старых ключей)
     post_delete_append_ops = [
-        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 2, "new_key_ratio": 0.0}
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 2}
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": post_delete_append_ops})
     check(f"{source}: exec append after delete", code, 200)

@@ -75,7 +75,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 elif isinstance(op, AppendOp):
                     inserted = append_rows_conn(
-                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, op.new_key_ratio, current_batch_id
+                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, current_batch_id
                     )
                     applied_records.append({
                         "step": step_idx,

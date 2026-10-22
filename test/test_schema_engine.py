@@ -159,6 +159,34 @@ class TestSchemaEngine(unittest.TestCase):
         self.assertIn("demo.clients", self.live.tables)
         self.assertNotIn("demo.customers", self.live.tables)
 
+    def test_primary_key_validation(self):
+        """Валидация PK: отклонение не уникальных колонок (например, string без sequence/uuid)."""
+        self.live.schemas = ["demo"]
+        # Невалидный PK: строковая колонка без sequence/uuid
+        bad_table_op = CreateTableOp(
+            entity_fqn="demo.tags",
+            primary_key=["tag_code"],
+            columns=[
+                ColumnSpec(name="tag_code", type="string"),
+                ColumnSpec(name="tag_name", type="string"),
+            ],
+        )
+        with self.assertRaises(SchemaEvolutionError) as ctx:
+            _build_ddl_and_update_state(bad_table_op, "mssql", self.live, 1)
+        self.assertIn("Primary key", str(ctx.exception))
+
+        # Валидный PK: строковая колонка с типом uuid
+        uuid_table_op = CreateTableOp(
+            entity_fqn="demo.events",
+            primary_key=["event_id"],
+            columns=[
+                ColumnSpec(name="event_id", type="uuid"),
+                ColumnSpec(name="payload", type="string"),
+            ],
+        )
+        ddl, desc = _build_ddl_and_update_state(uuid_table_op, "mssql", self.live, 2)
+        self.assertIn("demo.events", self.live.tables)
+
 
 if __name__ == "__main__":
     unittest.main()

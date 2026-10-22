@@ -36,6 +36,10 @@ class SequenceGenerator(BaseGenerator):
     kind: Literal["sequence"] = "sequence"
 
 
+class UuidGenerator(BaseGenerator):
+    kind: Literal["uuid"] = "uuid"
+
+
 class FakerGenerator(BaseGenerator):
     kind: Literal["faker"] = "faker"
     provider: str = Field(default="word", description="Метод Faker: company, name, word, address, email")
@@ -89,6 +93,7 @@ class DateOffsetGenerator(BaseGenerator):
 GeneratorSpec = Annotated[
     Union[
         SequenceGenerator,
+        UuidGenerator,
         FakerGenerator,
         ChoiceGenerator,
         RandomDecimalGenerator,
@@ -411,7 +416,6 @@ class TruncateOp(EntityFqnOpMixin):
 class AppendOp(EntityFqnOpMixin):
     op: Literal["append"] = "append"
     rows: int = Field(default=1, gt=0, le=100_000)
-    new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class UpdateOp(EntityFqnOpMixin):
@@ -501,7 +505,6 @@ class SourceManifestSpec(BaseModel):
 
 class AppendRequest(BaseModel):
     rows: int = Field(gt=0, le=100_000)
-    new_key_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class UpdateRequest(BaseModel):
