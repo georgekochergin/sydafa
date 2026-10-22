@@ -226,7 +226,9 @@ def check_and_heal_orphaned_state() -> None:
         )
 
 
-def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecOperation]:
+def compile_schema_decl_to_operations(
+    schema_data: dict[str, Any], rules_data: dict[str, Any] | None = None
+) -> list[ExecOperation]:
     """Транслирует декларативное описание schema из sources.json в упорядоченный батч DDL операций."""
     tables_dict = schema_data.get("tables", {})
     if not isinstance(tables_dict, dict) or not tables_dict:
@@ -273,16 +275,26 @@ def compile_schema_decl_to_operations(schema_data: dict[str, Any]) -> list[ExecO
         s_name, t_name, t_spec = table_map[fqn]
         pk = t_spec.get("primary_key", [])
         raw_cols = t_spec.get("columns", {})
+        t_rules = (
+            rules_data.get(fqn, {}).get("columns", {})
+            if isinstance(rules_data, dict) and isinstance(rules_data.get(fqn), dict)
+            else {}
+        )
         col_specs: list[ColumnSpec] = []
         if isinstance(raw_cols, dict):
             for col_name, col_type in raw_cols.items():
-                col_specs.append(ColumnSpec(name=col_name, type=col_type))
+                gen = t_rules.get(col_name)
+                col_specs.append(ColumnSpec(name=col_name, type=col_type, generator=gen))
         elif isinstance(raw_cols, list):
             for c in raw_cols:
                 if isinstance(c, dict):
-                    col_specs.append(ColumnSpec(name=c["name"], type=c["type"]))
+                    c_name = c["name"]
+                    c_type = c["type"]
+                    gen = c.get("generator") or t_rules.get(c_name)
+                    col_specs.append(ColumnSpec(name=c_name, type=c_type, generator=gen))
                 elif hasattr(c, "name") and hasattr(c, "type"):
-                    col_specs.append(ColumnSpec(name=c.name, type=c.type))
+                    gen = getattr(c, "generator", None) or t_rules.get(c.name)
+                    col_specs.append(ColumnSpec(name=c.name, type=c.type, generator=gen))
 
         fks_list: list[ForeignKey] = []
         for fk in t_spec.get("foreign_keys", []):
@@ -341,7 +353,7 @@ def apply_init_for_source(source: str) -> None:
     # 2. Декларативная схема schema (приоритетный формат)
     schema_raw = val.get("schema", {})
     if isinstance(schema_raw, dict) and schema_raw.get("tables"):
-        ddl_ops = compile_schema_decl_to_operations(schema_raw)
+        ddl_ops = compile_schema_decl_to_operations(schema_raw, rules_data=rules_raw)
         logger.info("Манифест sources.json: выполнение %d DDL операций декларативной схемы для '%s'...", len(ddl_ops), source)
         exec_engine.execute_source_operations(source, ddl_ops)
 

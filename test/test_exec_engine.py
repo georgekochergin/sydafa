@@ -56,11 +56,11 @@ def _build_live_with_audit() -> LiveSchema:
             entity_fqn="demo.customers",
             primary_key=["customer_id"],
             columns=[
-                ColumnSpec(name="customer_id", type="bigint"),
+                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
                 ColumnSpec(name="name", type="string"),
             ],
         ),
-        "oracle",
+        "mssql",
         live,
         1,
     )

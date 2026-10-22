@@ -135,6 +135,7 @@ class ColumnSpec(BaseModel):
 
     name: str
     type: str
+    generator: GeneratorSpec | None = None
 
     @field_validator("name")
     @classmethod

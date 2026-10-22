@@ -194,9 +194,7 @@ def _build_ddl_and_update_state(
 
             fk_col_names = {c for fk in op.foreign_keys for c in fk.columns}
             has_unique_col = any(
-                "uuid" in col_map[c].type.lower()
-                or (any(t in col_map[c].type.lower() for t in ("int", "bigint", "smallint", "tinyint")) and c not in fk_col_names)
-                or getattr(getattr(col_map[c], "generator", None), "kind", None) in ("sequence", "uuid")
+                getattr(getattr(col_map[c], "generator", None), "kind", None) in ("sequence", "uuid")
                 for c in filtered_pk
             )
             all_are_fk = all(c in fk_col_names for c in filtered_pk)
@@ -204,7 +202,7 @@ def _build_ddl_and_update_state(
                 raise SchemaEvolutionError(
                     step_index,
                     op.op,
-                    f"Primary key таблицы '{key}' должен включать хотя бы одну уникальную колонку ('sequence' или 'uuid') либо состоять из внешних ключей",
+                    f"Primary key таблицы '{key}' должен включать хотя бы одну уникальную колонку с явным генератором ('sequence' или 'uuid') либо состоять из внешних ключей",
                 )
 
         # Системно внедряем обязательную колонку _batch_id

@@ -416,7 +416,7 @@ class TestGenerators(unittest.TestCase):
             schema="dbo",
             primary_key=["order_id"],
             columns=[
-                ColumnSpec(name="order_id", type="bigint"),
+                ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"}),
                 ColumnSpec(name="title", type="string"),
             ],
             foreign_keys=[],
@@ -470,7 +470,7 @@ class TestGenerators(unittest.TestCase):
             schema="dbo",
             primary_key=["doc_id"],
             columns=[
-                ColumnSpec(name="doc_id", type="bigint"),
+                ColumnSpec(name="doc_id", type="bigint", generator={"kind": "sequence"}),
                 ColumnSpec(name="reg_number", type="bigint"),
             ],
             foreign_keys=[],
@@ -525,7 +525,7 @@ class TestGenerators(unittest.TestCase):
             name="orders",
             schema="dbo",
             primary_key=["order_id"],
-            columns=[ColumnSpec(name="order_id", type="bigint")],
+            columns=[ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"})],
             foreign_keys=[],
         )
         child = TableSchema(
@@ -534,7 +534,7 @@ class TestGenerators(unittest.TestCase):
             primary_key=["order_id", "item_seq"],
             columns=[
                 ColumnSpec(name="order_id", type="bigint"),
-                ColumnSpec(name="item_seq", type="bigint"),
+                ColumnSpec(name="item_seq", type="bigint", generator={"kind": "sequence"}),
             ],
             foreign_keys=[
                 ForeignKey(
@@ -566,7 +566,7 @@ class TestGenerators(unittest.TestCase):
             name="orders",
             schema="dbo",
             primary_key=["order_id"],
-            columns=[ColumnSpec(name="order_id", type="bigint")],
+            columns=[ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"})],
             foreign_keys=[],
         )
         child = TableSchema(
@@ -575,7 +575,7 @@ class TestGenerators(unittest.TestCase):
             primary_key=["order_id", "item_seq"],
             columns=[
                 ColumnSpec(name="order_id", type="bigint"),
-                ColumnSpec(name="item_seq", type="bigint"),
+                ColumnSpec(name="item_seq", type="bigint", generator={"kind": "sequence"}),
             ],
             foreign_keys=[
                 ForeignKey(

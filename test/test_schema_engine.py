@@ -160,7 +160,7 @@ class TestSchemaEngine(unittest.TestCase):
         self.assertNotIn("demo.customers", self.live.tables)
 
     def test_primary_key_validation(self):
-        """Валидация PK: отклонение не уникальных колонок (например, string без sequence/uuid)."""
+        """Валидация PK: отклонение колонок без явного генератора sequence или uuid."""
         self.live.schemas = ["demo"]
         # Невалидный PK: строковая колонка без sequence/uuid
         bad_table_op = CreateTableOp(
@@ -175,17 +175,42 @@ class TestSchemaEngine(unittest.TestCase):
             _build_ddl_and_update_state(bad_table_op, "mssql", self.live, 1)
         self.assertIn("Primary key", str(ctx.exception))
 
-        # Валидный PK: строковая колонка с типом uuid
+        # Невалидный PK: числовая колонка без явного генератора (нет неявного fallback)
+        bad_int_op = CreateTableOp(
+            entity_fqn="demo.num_tags",
+            primary_key=["id"],
+            columns=[
+                ColumnSpec(name="id", type="bigint"),
+                ColumnSpec(name="tag_name", type="string"),
+            ],
+        )
+        with self.assertRaises(SchemaEvolutionError) as ctx:
+            _build_ddl_and_update_state(bad_int_op, "mssql", self.live, 2)
+        self.assertIn("Primary key", str(ctx.exception))
+
+        # Валидный PK: колонка с явным генератором uuid
         uuid_table_op = CreateTableOp(
             entity_fqn="demo.events",
             primary_key=["event_id"],
             columns=[
-                ColumnSpec(name="event_id", type="uuid"),
+                ColumnSpec(name="event_id", type="uuid", generator={"kind": "uuid"}),
                 ColumnSpec(name="payload", type="string"),
             ],
         )
-        ddl, desc = _build_ddl_and_update_state(uuid_table_op, "mssql", self.live, 2)
+        ddl, desc = _build_ddl_and_update_state(uuid_table_op, "mssql", self.live, 3)
         self.assertIn("demo.events", self.live.tables)
+
+        # Валидный PK: колонка с явным генератором sequence
+        seq_table_op = CreateTableOp(
+            entity_fqn="demo.orders",
+            primary_key=["order_id"],
+            columns=[
+                ColumnSpec(name="order_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="title", type="string"),
+            ],
+        )
+        ddl, desc = _build_ddl_and_update_state(seq_table_op, "mssql", self.live, 4)
+        self.assertIn("demo.orders", self.live.tables)
 
 
 if __name__ == "__main__":

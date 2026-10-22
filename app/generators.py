@@ -450,11 +450,15 @@ def _mint_new_row(
             col_spec = next((c for c in table.columns if c.name == pk_col), None)
             gen = session.profile.columns.get(pk_col) or getattr(col_spec, "generator", None)
             gen_kind = getattr(gen, "kind", None)
-            col_type = (col_spec.type if col_spec else "").lower()
-            if gen_kind == "uuid" or "uuid" in col_type:
+            if gen_kind == "uuid":
                 values[pk_col] = str(uuid.uuid4())
-            else:
+            elif gen_kind == "sequence":
                 values[pk_col] = session.next_sequence_value(pk_col)
+            else:
+                raise GeneratorError(
+                    f"Колонка первичного ключа '{pk_col}' таблицы '{table.schema_}.{table.name}' "
+                    f"не имеет обязательного уникального генератора ('sequence' или 'uuid')"
+                )
 
     values[BATCH_ID_COLUMN] = batch_id
 
