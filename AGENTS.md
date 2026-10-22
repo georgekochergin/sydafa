@@ -3,7 +3,8 @@
 ## Контекст и архитектура
 - Автономный сервис эмуляции СУБД, оркестрации контейнеров через Docker SDK, транзакционной эволюции схем данных (API-first) и синтетической генерации данных (FK-aware).
 - Стек: Python 3.12, FastAPI, Uvicorn, Pydantic v2, pymssql, oracledb, Faker, Docker Python SDK.
-- Источники поднимаются лениво (`wake_up`): не в `lifespan`. Данные — named volume `{prefix}{source}-data`; секреты — `/state/secrets.json`; статус — `/state/source_status.{source}.json`.
+- Источники поднимаются лениво (`wake_up`): не в `lifespan`. Данные — named volume `{prefix}{source}-data`; секреты — `/state/secrets.json`; статус — `/state/source_status.{source}.json`; сиквенсы ключей — `/state/sequences.{source}.json`; батчи — `/state/batch_sequence.{source}.json`.
+- Монотонность сиквенсов (Zero Key Resurrection): генератор `sequence` и первичные ключи работают по персистентным монотонным счетчикам в `/state/sequences.{source}.json` (старт с 0, инкремент на каждый батч) без чтения таблиц БД (`SELECT MAX`). Значения сиквенсов строго возрастают и никогда не переиспользуются после `delete` или `truncate`.
 - Принцип Safe GET (RFC 7231): GET-эндпоинты (`/sources/{source}`, `/sources/{source}/schema`, `/sources/{source}/status`, `/sources/{source}/rules`, `/health`) безопасны и читают только из тома `/state` и памяти; они не запускают контейнеры СУБД. Контейнер физически поднимается только через POST `/activate` или POST `/migrate`.
 - Публичный аккаунт: `sydafa` / `sydafa` (только чтение). Внутренний DBA со случайным логином и паролем в `/state/secrets.json`. `sa` DISABLE, `pdbadmin` DROP.
 - Внешний host-порт объявляется в `sources.json` (`external_port`) и возвращается в объекте `connection`. Объект `connection` содержит готовый `jdbc_url` (поле `parameters` удалено как избыточное). Поле `activated_until` всегда в формате ISO 8601 UTC (`Z`).

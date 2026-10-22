@@ -257,6 +257,16 @@ def run_source_e2e(base_url: str, source: str):
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": random_delete_ops})
     check(f"{source}: exec random_rows delete", code, 200)
 
+    # 6.4. Проверка строго монотонного роста сиквенса после delete (нет "возрождения" старых ключей)
+    post_delete_append_ops = [
+        {"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 2, "new_key_ratio": 0.0}
+    ]
+    code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": post_delete_append_ops})
+    check(f"{source}: exec append after delete", code, 200)
+    if prefix:
+        new_ids_count = scalar(source, prefix, f"SELECT COUNT(*) FROM {_tbl(source, schema_name, 'items')} WHERE {_col(source, 'item_id')} IN (6, 7)")
+        check(f"{source}: post-delete appended rows got monotonic IDs 6 and 7", new_ids_count, "2")
+
     # 7. Corner-cases:
     # 7a. Блокировка truncate родителя без cascade=true при наличии дочерних строк -> 409
     bad_trunc = [

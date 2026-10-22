@@ -85,6 +85,7 @@ def _generate_value(
     row_values: dict[str, Any] | None = None,
     gen: GeneratorSpec | None = None,
     col_type: str | None = None,
+    session: GenerationSession | None = None,
 ) -> Any:
     if isinstance(col, ColumnSpec):
         col_name = col.name
@@ -189,6 +190,12 @@ def _generate_value(
         offset = random.randint(min_o, max_o)
         return _shift_date(base_date, dim, offset)
 
+    if kind == "sequence":
+        if session is not None:
+            return session.next_sequence_value(col_name)
+        from . import schema_state
+        return schema_state.reserve_sequence_range("default", "default.default", col_name, 1)
+
     return None
 
 
@@ -197,14 +204,6 @@ def _fk_for_column(table: TableSchema, column_name: str) -> ForeignKey | None:
         if column_name in fk.columns:
             return fk
     return None
-
-
-def _next_sequence_value(conn, dialect: str, qualified: str, pk_col: str) -> int:
-    cur = conn.cursor()
-    col_expr = quote_ident(pk_col, dialect)
-    cur.execute(f"SELECT MAX({col_expr}) FROM {qualified}")
-    (current_max,) = cur.fetchone()
-    return int(current_max) + 1 if current_max is not None else 1
 
 
 def _pick_existing_pk(conn, dialect: str, qualified: str, pk_cols: list[str]) -> dict[str, Any] | None:
@@ -237,7 +236,7 @@ def _find_table(live: LiveSchema, schema: str, table_name: str) -> TableSchema:
 
 
 class GenerationSession:
-    """Сессия генерации данных с кэшированием накопительных балансов."""
+    """Сессия генерации данных с кэшированием накопительных балансов и диапазонов сиквенсов."""
 
     def __init__(
         self,
@@ -246,14 +245,45 @@ class GenerationSession:
         live: LiveSchema,
         table: TableSchema,
         profile: TableRuleProfile,
+        source: str = "",
+        total_rows: int = 1,
     ):
         self.conn = conn
         self.dialect = dialect
         self.live = live
         self.table = table
         self.profile = profile
+        self.source = source
+        self.total_rows = max(total_rows, 1)
         self.balances: dict[int, dict[tuple[Any, ...], float]] = {}
+        self._sequences: dict[str, dict[str, int]] = {}
         self._preload_state()
+
+    def next_sequence_value(self, column: str) -> int:
+        """Возвращает следующее монотонное значение сиквенса из зарезервированного диапазона."""
+        if column not in self._sequences:
+            from . import schema_state
+            src = self.source or "default"
+            entity_fqn = f"{self.table.schema_}.{self.table.name}"
+            start_val = schema_state.reserve_sequence_range(
+                src, entity_fqn, column, self.total_rows
+            )
+            self._sequences[column] = {
+                "curr": start_val,
+                "limit": start_val + self.total_rows - 1,
+            }
+
+        seq_info = self._sequences[column]
+        if seq_info["curr"] <= seq_info["limit"]:
+            val = seq_info["curr"]
+            seq_info["curr"] += 1
+            return val
+        else:
+            from . import schema_state
+            src = self.source or "default"
+            entity_fqn = f"{self.table.schema_}.{self.table.name}"
+            val = schema_state.reserve_sequence_range(src, entity_fqn, column, 1)
+            return val
 
     def _preload_state(self) -> None:
         qualified = qualify_table(self.table.schema_, self.table.name, self.dialect)
@@ -319,7 +349,7 @@ def _mint_new_row(
         from . import rules_state
         entity_fqn = f"{table.schema_}.{table.name}"
         profile = rules_state.get_table_rules(source, entity_fqn) or TableRuleProfile()
-        session = GenerationSession(conn, dialect, live, table, profile)
+        session = GenerationSession(conn, dialect, live, table, profile, source=source, total_rows=1)
 
     for fk in table.foreign_keys:
         values.update(_resolve_fk_values(conn, source, dialect, live, fk, table.schema_, new_key_ratio, batch_id))
@@ -406,12 +436,12 @@ def _mint_new_row(
             if inv_handled:
                 continue
 
-            values[c_name] = _generate_value(col, values, gen=gen)
+            values[c_name] = _generate_value(col, values, gen=gen, session=session)
             remaining.remove(c_name)
 
     for pk_col in table.primary_key:
         if pk_col not in values:
-            values[pk_col] = _next_sequence_value(conn, dialect, qualified, pk_col)
+            values[pk_col] = session.next_sequence_value(pk_col)
 
     values[BATCH_ID_COLUMN] = batch_id
 
@@ -426,7 +456,7 @@ def append_rows_conn(
     from . import rules_state
     entity_fqn = f"{schema}.{table_name}"
     profile = rules_state.get_table_rules(source, entity_fqn) or TableRuleProfile()
-    session = GenerationSession(conn, dialect, live, table, profile)
+    session = GenerationSession(conn, dialect, live, table, profile, source=source, total_rows=rows)
     for _ in range(rows):
         _mint_new_row(conn, source, dialect, live, table, new_key_ratio, batch_id, session=session)
     return rows

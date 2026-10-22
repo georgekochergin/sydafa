@@ -27,7 +27,12 @@ from .models import (
     TransferTableOp,
 )
 from .render_ddl import map_type, qualify_table, render_create_table
-from .schema_state import append_evolution_log, get_live_schema, save_live_schema
+from .schema_state import (
+    append_evolution_log,
+    get_live_schema,
+    save_live_schema,
+    sync_sequences_after_operations,
+)
 from .sources import get_source
 
 logger = logging.getLogger("sydafa.schema_engine")
@@ -429,6 +434,7 @@ def execute_evolve(source_name: str, request: EvolveRequest) -> EvolveResult:
 
     # 4. Обновление состояния и журнала
     save_live_schema(source_name, working_live)
+    sync_sequences_after_operations(source_name, request.operations)
     log_entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "source": source_name,

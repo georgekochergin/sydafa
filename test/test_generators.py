@@ -188,11 +188,8 @@ class TestGenerators(unittest.TestCase):
 
         _mint_new_row(conn, "test_source", "mssql", live, table, new_key_ratio=1.0, batch_id=1, session=session)
 
-        self.assertEqual(len(conn.cur.executed), 2)
-        select_sql, _ = conn.cur.executed[0]
-        self.assertIn("SELECT MAX", select_sql)
-
-        insert_sql, params = conn.cur.executed[1]
+        self.assertEqual(len(conn.cur.executed), 1)
+        insert_sql, params = conn.cur.executed[0]
         self.assertIn("INSERT INTO", insert_sql)
 
         cols_part = insert_sql.split("(")[1].split(")")[0]
@@ -403,3 +400,100 @@ class TestGenerators(unittest.TestCase):
             amt = float(row_dict["amount"])
 
             self.assertGreater(amt, 0.0, "При отрицательном остатке списания должны быть заблокированы!")
+
+    def test_monotonic_sequence_no_sql_read_and_no_resurrection(self):
+        """Проверка строгой монотонности сиквенса без SQL SELECT MAX и отсутствия переиспользования ID."""
+        from app.generators import append_rows_conn
+        from app import schema_state
+
+        source = "test_seq_src"
+        schema_state.reset_memory_cache(source)
+
+        table = TableSchema(
+            name="orders",
+            schema="dbo",
+            primary_key=["order_id"],
+            columns=[
+                ColumnSpec(name="order_id", type="bigint"),
+                ColumnSpec(name="title", type="string"),
+            ],
+            foreign_keys=[],
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.orders": table})
+        conn = FakeConn()
+
+        # Первый батч: 3 строки
+        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=3, new_key_ratio=1.0, batch_id=1)
+
+        # Проверяем, что не было ни одного SELECT MAX
+        for sql, _ in conn.cur.executed:
+            self.assertNotIn("SELECT MAX", sql)
+
+        # Проверяем значения order_id: 1, 2, 3
+        executed_inserts = [e for e in conn.cur.executed if "INSERT INTO" in e[0]]
+        self.assertEqual(len(executed_inserts), 3)
+
+        ids_batch1 = []
+        for insert_sql, params in executed_inserts:
+            cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+            row_dict = dict(zip(cols, params))
+            ids_batch1.append(row_dict["order_id"])
+        self.assertEqual(ids_batch1, [1, 2, 3])
+
+        # Второй батч: 2 строки (имитируем, что строки 2 и 3 могли быть удалены в БД)
+        conn.cur.executed.clear()
+        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=2, new_key_ratio=1.0, batch_id=2)
+
+        # Новые строки обязаны получить 4 и 5 (никакого возврата к 2 или 3)
+        ids_batch2 = []
+        for insert_sql, params in conn.cur.executed:
+            if "INSERT INTO" in insert_sql:
+                cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+                row_dict = dict(zip(cols, params))
+                ids_batch2.append(row_dict["order_id"])
+        self.assertEqual(ids_batch2, [4, 5])
+
+        schema_state.reset_memory_cache(source)
+
+    def test_sequence_generator_on_non_pk_column(self):
+        """Генератор kind=sequence корректно работает на не-PK колонках."""
+        from app.generators import append_rows_conn
+        from app import schema_state, rules_state
+
+        source = "test_seq_non_pk"
+        schema_state.reset_memory_cache(source)
+
+        table = TableSchema(
+            name="docs",
+            schema="dbo",
+            primary_key=["doc_id"],
+            columns=[
+                ColumnSpec(name="doc_id", type="bigint"),
+                ColumnSpec(name="reg_number", type="bigint"),
+            ],
+            foreign_keys=[],
+        )
+        rules_state.set_table_rules(
+            source,
+            "dbo.docs",
+            TableRuleProfile(columns={"reg_number": SequenceGenerator()}),
+        )
+        live = LiveSchema(schemas=["dbo"], tables={"dbo.docs": table})
+        conn = FakeConn()
+
+        append_rows_conn(conn, source, "mssql", live, "dbo", "docs", rows=3, new_key_ratio=1.0, batch_id=1)
+
+        reg_numbers = []
+        doc_ids = []
+        for insert_sql, params in conn.cur.executed:
+            if "INSERT INTO" in insert_sql:
+                cols = [c.strip().strip("[]\"") for c in insert_sql.split("(")[1].split(")")[0].split(",")]
+                row_dict = dict(zip(cols, params))
+                doc_ids.append(row_dict["doc_id"])
+                reg_numbers.append(row_dict["reg_number"])
+
+        self.assertEqual(doc_ids, [1, 2, 3])
+        self.assertEqual(reg_numbers, [1, 2, 3])
+
+        schema_state.reset_memory_cache(source)
+
