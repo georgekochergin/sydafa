@@ -193,7 +193,7 @@ def run_source_e2e(base_url: str, source: str):
         check(
             f"{source}: dictionary tables are lowercase",
             dict_tables,
-            "categories,items,_upd_categories,_del_categories,_upd_items,_del_items",
+            "_del_categories,_del_items,_upd_categories,_upd_items,categories,items",
         )
 
     # 4. DML: Попытка append в дочернюю таблицу при пустом родителе -> 409
