@@ -28,6 +28,11 @@ description: Use when the user asks to generate JSON request bodies for the syda
    - оркестрация инстансов: `POST /sources` (создание `{"name": "...", "type": "..."}`);
    - данные и эволюция схемы: `POST /sources/{source}/migrate` (единый транзакционный DDL + DML метод);
    - профили правил и инвариантов генерации: `PUT /sources/{source}/rules/{entity_fqn}` (установка правил для сущности `schema.table`);
+   - точечные правки правил без пересылки всего профиля:
+     `PUT /sources/{source}/rules/{entity_fqn}/columns/{column}` (генератор одной колонки),
+     `DELETE /sources/{source}/rules/{entity_fqn}/columns/{column}` (удаление правила колонки),
+     `POST /sources/{source}/rules/{entity_fqn}/invariants` (добавление одного инварианта; дубликат — 409),
+     `DELETE /sources/{source}/rules/{entity_fqn}/invariants/{index}` (удаление по позиции);
    - инспекция из DBeaver: `POST /sources/{source}/activate?ttl_minutes=15`
      (в ответе объект `connection`); статус — `GET /sources/{source}/status`;
      остановка — `POST /sources/{source}/deactivate`.
@@ -46,6 +51,9 @@ description: Use when the user asks to generate JSON request bodies for the syda
 ## Эндпоинт правил связности данных: `PUT /sources/{source}/rules/{entity_fqn}`
 
 Принимает профиль правил генерации `TableRuleProfile` (управляет как генераторами колонок `columns`, так и инвариантами таблицы `invariants`).
+**Внимание: PUT перезаписывает профиль целиком** — для правки одной колонки или одного инварианта используйте вложенные ручки:
+`PUT .../columns/{column}` (тело — один `GeneratorSpec`), `DELETE .../columns/{column}`,
+`POST .../invariants` (тело — один инвариант), `DELETE .../invariants/{index}`.
 Опциональный параметр: `?validate_existing=false` (или поле в инварианте).
 - `false` (по умолчанию, мягкий режим): мутации `update`/`delete` свободны (позволяют вносить тестовые аномалии), а последующий `append` автоматически балансирует счет пополнениями.
 - `true` (строгий режим): исторические данные проверяются с ошибкой 422, а мутации `update`/`delete` блокируются Invariant Guard при нарушении баланса.

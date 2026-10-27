@@ -306,6 +306,10 @@ services:
 | `GET` | `/sources/{source}/rules` | Список всех зарегистрированных профилей правил генерации для источника (`TableRuleProfile`). Safe GET. |
 | `GET` | `/sources/{source}/rules/{entity_fqn}` | Профиль правил генерации конкретной таблицы (`columns` + `invariants`). Safe GET. |
 | `PUT` | `/sources/{source}/rules/{entity_fqn}` | Установка или обновление профиля правил генерации для таблицы (`columns` и/или `invariants`). Опциональный query-параметр `?validate_existing=false` (мягкий режим; при `true` — строгая проверка данных в СУБД с ошибкой 422). |
+| `PUT` | `/sources/{source}/rules/{entity_fqn}/columns/{column}` | Точечное назначение или замена генератора **одной колонки** (`GeneratorSpec` в теле); остальной профиль не затрагивается. |
+| `DELETE` | `/sources/{source}/rules/{entity_fqn}/columns/{column}` | Точечное удаление правила генерации одной колонки. |
+| `POST` | `/sources/{source}/rules/{entity_fqn}/invariants` | Добавление **одного инварианта связности** к профилю таблицы. Дубликат того же инварианта отклоняется с `409`. Поддерживает `?validate_existing=true`. |
+| `DELETE` | `/sources/{source}/rules/{entity_fqn}/invariants/{index}` | Удаление инварианта по его позиции (индексу) в списке `invariants`. |
 | `DELETE` | `/sources/{source}/rules/{entity_fqn}` | Сброс правил генерации таблицы. |
 | `GET` | `/sources/{source}/schema` | Детальная live-схема данных: структура таблиц, типы колонок, первичные и внешние ключи. Safe GET. |
 | `POST` | `/sources/{source}/migrate` | **Единый метод миграций**: атомарное применение DDL (схемы, таблицы, колонки) и DML (`truncate`, `append`, `update`, `delete`) в режиме All-or-Nothing. |
@@ -345,6 +349,31 @@ services:
 1. **Настроить генераторы колонок таблицы** (передав словарь `columns`);
 2. **Настроить инварианты таблицы** (передав список `invariants`);
 3. **Обновить профиль целиком**, объединяя генераторы колонок и инварианты связности.
+
+> `PUT` **перезаписывает профиль целиком** — ключи, забытые в теле, будут удалены. Для точечных правок без пересылки всего профиля используйте вложенные эндпоинты:
+
+**Точечная замена генератора одной колонки** — `PUT /sources/{source}/rules/{entity_fqn}/columns/{column}` (назначение или замена; остальной профиль не меняется):
+
+```bash
+curl -X PUT "http://localhost:8090/sources/bank/rules/retail_bank.clients/columns/email" \
+  -H "Content-Type: application/json" \
+  -d '{"kind": "faker", "provider": "email", "null_ratio": 0.05}'
+```
+
+**Точечное удаление правила колонки** (например, после переименования или удаления колонки на источнике) — `DELETE /sources/{source}/rules/{entity_fqn}/columns/{column}`.
+
+**Добавление одного инварианта связности** — `POST /sources/{source}/rules/{entity_fqn}/invariants`:
+
+```json
+{
+  "kind": "cumulative_balance",
+  "amount_column": "amount",
+  "partition_by": ["account_id"],
+  "min_balance": 0.0
+}
+```
+
+Повторная регистрация того же инварианта отклоняется с `409 Conflict`. Удаление инварианта — `DELETE /sources/{source}/rules/{entity_fqn}/invariants/{index}`, где `{index}` — позиция в списке `invariants` профиля (порядок виден в `GET` того же профиля).
 
 ### 6.2. Справочник логических типов данных СУБД (`type`)
 
