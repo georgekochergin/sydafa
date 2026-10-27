@@ -113,16 +113,29 @@ def provision_mssql(source_name: str, config: SourceConfig) -> None:
 
 
 def _ensure_oracle_reader(source_name: str, reader_user: str = READER_USER) -> None:
+    """Создает/проверяет публичного читателя в PDB и выдает ему права.
+
+    Помимо чтения данных (SELECT ANY TABLE) читатель получает SELECT ANY
+    DICTIONARY — только для мониторинга активных сессий (v$session), включая
+    наблюдение параллельного JDBC-чтения. Выдача выполняется из сессии
+    SYSDBA: у dba_user есть SYSDBA CONTAINER=ALL, а обычная сессия с ролью
+    DBA не может выдать системную привилегию словаря.
+    """
+    import oracledb
+
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
-            with oracle_connection(source_name=source_name, service_name=SYDAFA_DB) as conn:
+            with oracle_connection(
+                source_name=source_name, service_name=SYDAFA_DB, mode=oracledb.AUTH_MODE_SYSDBA
+            ) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT username FROM all_users WHERE UPPER(username) = UPPER('{reader_user}')")
                 if not cur.fetchone():
                     cur.execute(f'CREATE USER {reader_user} IDENTIFIED BY "{reader_user}"')
                 cur.execute(f"GRANT CREATE SESSION TO {reader_user}")
                 cur.execute(f"GRANT SELECT ANY TABLE TO {reader_user}")
+                cur.execute(f"GRANT SELECT ANY DICTIONARY TO {reader_user}")
                 return
         except Exception:
             time.sleep(2)
