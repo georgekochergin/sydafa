@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import re
+import shutil
 import socket
 import threading
 import time
@@ -83,7 +85,7 @@ def _get_docker_client() -> docker.DockerClient:
 
 def _get_context(client: docker.DockerClient) -> tuple[str, str]:
     network_name = "bridge"
-    project_name = "sydafa"
+    project_name = ""
     try:
         hostname = socket.gethostname()
         self_container = client.containers.get(hostname)
@@ -197,6 +199,27 @@ def _ensure_volume(client: docker.DockerClient, volume_name: str) -> None:
         logger.info("Создан volume %s", volume_name)
 
 
+def reset_data_volume(client: docker.DockerClient, volume: Any) -> None:
+    """Clear a Compose-mounted data volume, or remove an unmounted volume."""
+    try:
+        parent = client.containers.get(socket.gethostname())
+    except NotFound:
+        volume.remove(force=True)
+        return
+    for mount in parent.attrs.get("Mounts", []):
+        destination = mount.get("Destination", "")
+        if (mount.get("Type") == "volume" and mount.get("Name") == volume.name
+                and destination.startswith("/source-volumes/")):
+            root = Path(destination)
+            for entry in root.iterdir():
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+            return
+    volume.remove(force=True)
+
+
 def build_connection_details(
     source_name: str,
     config: SourceConfig,
@@ -242,12 +265,18 @@ def _run_container(
 
     secrets = get_secrets()
     labels = {
-        "com.docker.compose.project": project_name,
-        "com.docker.compose.service": name,
         "sydafa.managed": "true",
         "sydafa.prefix": CONTAINER_PREFIX,
         "sydafa.source": source_name,
     }
+    if project_name:
+        labels.update({
+            "com.docker.compose.project": project_name,
+            "com.docker.compose.service": name,
+            "com.docker.compose.config-hash": "sydafa-managed-v1",
+            "com.docker.compose.oneoff": "False",
+            "com.docker.compose.container-number": "1",
+        })
     environment: dict[str, str] = {}
     if config.type == "mssql":
         environment = {
@@ -408,7 +437,7 @@ def purge_source_container_and_volume(source_name: str) -> None:
         try:
             vol = client.volumes.get(vname)
             logger.info("Удаление тома данных %s для источника '%s'...", vname, source_name)
-            vol.remove(force=True)
+            reset_data_volume(client, vol)
         except NotFound:
             pass
         except Exception as e:
