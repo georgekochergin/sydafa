@@ -100,6 +100,23 @@ def rename_table_sequences(source: str, old_fqn: str, new_fqn: str) -> None:
         save_sequences(source, new_seqs)
 
 
+def rename_schema_sequences(source: str, old_schema: str, new_schema: str) -> None:
+    """Переносит счетчики сиквенсов всех таблиц схемы при rename_schema (Zero Key Resurrection)."""
+    seqs = load_sequences(source)
+    old_prefix = f"{old_schema}."
+    changed = False
+    new_seqs = {}
+    for k, v in seqs.items():
+        if k.startswith(old_prefix):
+            rest = k[len(old_prefix):]
+            new_seqs[f"{new_schema}.{rest}"] = v
+            changed = True
+        else:
+            new_seqs[k] = v
+    if changed:
+        save_sequences(source, new_seqs)
+
+
 def rename_column_sequence(source: str, entity_fqn: str, old_col: str, new_col: str) -> None:
     """Переименовывает колонку в словаре счетчиков сиквенсов при rename_column."""
     seqs = load_sequences(source)
@@ -122,6 +139,10 @@ def sync_sequences_after_operations(source: str, operations: list[Any]) -> None:
             from_name = getattr(op, "from_name", "") or getattr(op, "table", "")
             to_name = getattr(op, "to_name", "")
             rename_table_sequences(source, f"{schema_}.{from_name}", f"{schema_}.{to_name}")
+        elif op_name == "rename_schema":
+            from_name = getattr(op, "from_name", "")
+            to_name = getattr(op, "to_name", "")
+            rename_schema_sequences(source, from_name, to_name)
         elif op_name == "transfer_table":
             from_schema = getattr(op, "from_schema", "") or getattr(op, "schema_", "")
             to_schema = getattr(op, "to_schema", "")

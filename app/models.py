@@ -46,6 +46,17 @@ class FakerGenerator(BaseGenerator):
     locale: str = Field(default="ru_RU", description="Локаль Faker, по умолчанию ru_RU")
 
 
+class PatternGenerator(BaseGenerator):
+    kind: Literal["pattern"] = "pattern"
+    template: str = Field(
+        min_length=1,
+        description=(
+            "Шаблон строки: '#' — случайная цифра, '@' — заглавная латиница, "
+            "'a' — строчная латиница, '?' — буква или цифра; остальные символы переносятся буквально"
+        ),
+    )
+
+
 class ChoiceGenerator(BaseGenerator):
     kind: Literal["choice"] = "choice"
     values: list[Any] = Field(min_length=1, description="Список допустимых значений: ['Retail', 'Corporate', 'VIP']")
@@ -95,6 +106,7 @@ GeneratorSpec = Annotated[
         SequenceGenerator,
         UuidGenerator,
         FakerGenerator,
+        PatternGenerator,
         ChoiceGenerator,
         RandomDecimalGenerator,
         RandomDateGenerator,

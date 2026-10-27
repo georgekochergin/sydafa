@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import schema_state
-from app.models import DropTableOp, RenameColumnOp, RenameTableOp, TransferTableOp
+from app.models import DropTableOp, RenameColumnOp, RenameSchemaOp, RenameTableOp, TransferTableOp
 
 
 class TestSchemaStateSequences(unittest.TestCase):
@@ -78,14 +78,18 @@ class TestSchemaStateSequences(unittest.TestCase):
         schema_state.reserve_sequence_range("test_src", "demo.t1", "id", count=10)
         schema_state.reserve_sequence_range("test_src", "demo.t2", "id", count=20)
         schema_state.reserve_sequence_range("test_src", "demo.t3", "id", count=30)
+        schema_state.reserve_sequence_range("test_src", "other.t4", "id", count=40)
 
         ops = [
             DropTableOp(entity_fqn="demo.t1"),
             RenameTableOp(entity_fqn="demo.t2", to_name="t2_renamed"),
             TransferTableOp(entity_fqn="demo.t3", to_schema="archive"),
+            RenameSchemaOp(from_name="other", to_name="legacy"),
         ]
         schema_state.sync_sequences_after_operations("test_src", ops)
 
         self.assertEqual(schema_state.get_current_sequence_value("test_src", "demo.t1", "id"), 0)
         self.assertEqual(schema_state.get_current_sequence_value("test_src", "demo.t2_renamed", "id"), 20)
         self.assertEqual(schema_state.get_current_sequence_value("test_src", "archive.t3", "id"), 30)
+        self.assertEqual(schema_state.get_current_sequence_value("test_src", "legacy.t4", "id"), 40)
+        self.assertEqual(schema_state.get_current_sequence_value("test_src", "other.t4", "id"), 0)

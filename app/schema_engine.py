@@ -159,9 +159,12 @@ def _build_ddl_and_update_state(
             ddl_statements.append(f"CREATE USER {quote_ident(op.to_name, dialect)} IDENTIFIED BY sydafa")
             ddl_statements.append(f"GRANT UNLIMITED TABLESPACE TO {quote_ident(op.to_name, dialect)}")
             ddl_statements.append(f"GRANT CREATE SESSION, CREATE TABLE TO {quote_ident(op.to_name, dialect)}")
+            # Oracle не умеет переносить таблицы между схемами ALTER-командой:
+            # копируем данные CTAS в новую схему, затем удаляем старого пользователя вместе с его таблицами
             for t in tables_to_move:
                 ddl_statements.append(
-                    f"ALTER TABLE {qualify_table(op.from_schema, t.name, dialect)} RENAME TO {quote_ident(t.name, dialect)}"
+                    f"CREATE TABLE {qualify_table(op.to_name, t.name, dialect)} "
+                    f"AS SELECT * FROM {qualify_table(op.from_name, t.name, dialect)}"
                 )
             ddl_statements.append(f"DROP USER {quote_ident(op.from_name, dialect)} CASCADE")
 

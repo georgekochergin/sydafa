@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -148,6 +149,7 @@ def run_source_e2e(base_url: str, source: str):
             "columns": [
                 {"name": "cat_id", "type": "bigint", "generator": {"kind": "sequence"}},
                 {"name": "cat_name", "type": "string", "generator": {"kind": "faker", "provider": "word"}},
+                {"name": "cat_code", "type": "string", "generator": {"kind": "pattern", "template": "CAT-#####-@"}},
             ],
             "foreign_keys": [],
         },
@@ -208,6 +210,18 @@ def run_source_e2e(base_url: str, source: str):
     ]
     code, res = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": append_ops})
     check(f"{source}: exec append rows", code, 200)
+
+    # 4.2. Генератор pattern: значения соответствуют шаблону CAT-#####-@
+    if prefix:
+        cat_code = scalar(
+            source, prefix,
+            f"SELECT {_col(source, 'cat_code')} FROM {_tbl(source, schema_name, 'categories')} WHERE {_col(source, 'cat_id')}=1",
+        )
+        check(
+            f"{source}: pattern generator matches template",
+            bool(re.fullmatch(r"CAT-\d{5}-[A-Z]", str(cat_code))),
+            True,
+        )
 
     # 5. DML: Update по предикату
     update_ops = [

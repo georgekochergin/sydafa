@@ -11,7 +11,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 
 > **Единая точка правды (Single Source of Truth):**
 > Каноническая проектная документация, полное описание всех 14 операций, поддерживаемых типов (`bigint`, `string`, `decimal(p,s)`, `date`, `timestamp`),
-> параметров генераторов (`sequence`, `uuid`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`),
+> параметров генераторов (`sequence`, `uuid`, `faker`, `pattern`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`, `template`),
 > поведения таблиц аудита (`_upd_`, `_del_`) и правил валидации зафиксированы в основном файле проекта: [README.md](../../../README.md) (Раздел 7 «Транзакционная эволюция схем и управление данными (`POST /sources/{source}/migrate`)»).
 > Настоящий скилл ссылается на `README.md` и служит исключительно для быстрой сборки JSON-спецификаций из текста.
 > Жизненный цикл контейнеров и томов описан в README, раздел «Очистка динамических источников в Docker Compose»; `deactivate` останавливает СУБД, но не заменяет полную очистку Compose.
@@ -63,7 +63,8 @@ description: Use when the user asks to generate JSON request bodies for the syda
 {
   "columns": {
     "account_id": {"kind": "choice", "values": [101, 102, 103]},
-    "client_id": {"kind": "choice", "values": [1, 2, 3]}
+    "client_id": {"kind": "choice", "values": [1, 2, 3]},
+    "account_number": {"kind": "pattern", "template": "40817810############"}
   },
   "invariants": [
     {

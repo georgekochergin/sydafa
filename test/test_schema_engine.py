@@ -126,6 +126,49 @@ class TestSchemaEngine(unittest.TestCase):
         ddl, _ = _build_ddl_and_update_state(DropSchemaOp(name="demo"), "oracle", self.live, 1)
         self.assertIn('DROP USER "demo" CASCADE', ddl[0])
 
+    def test_rename_schema_oracle_moves_tables_via_ctas(self):
+        """rename_schema в Oracle переносит таблицы CTAS в новую схему, а не теряет их при DROP USER."""
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", self.live, 0)
+        _build_ddl_and_update_state(
+            CreateTableOp(
+                entity_fqn="demo.customers",
+                primary_key=["customer_id"],
+                columns=[
+                    ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                    ColumnSpec(name="name", type="string"),
+                ],
+            ),
+            "oracle",
+            self.live,
+            1,
+        )
+        ddl, _ = _build_ddl_and_update_state(RenameSchemaOp(from_name="demo", to_name="billing"), "oracle", self.live, 2)
+        self.assertIn('CREATE USER "billing" IDENTIFIED BY sydafa', ddl[0])
+        # Основная и аудит-таблицы копируются в новую схему до удаления старого пользователя
+        self.assertIn('CREATE TABLE "billing"."customers" AS SELECT * FROM "demo"."customers"', ddl)
+        self.assertIn('CREATE TABLE "billing"."_upd_customers" AS SELECT * FROM "demo"."_upd_customers"', ddl)
+        self.assertIn('CREATE TABLE "billing"."_del_customers" AS SELECT * FROM "demo"."_del_customers"', ddl)
+        # Старый пользователь удаляется последним
+        self.assertEqual(ddl[-1], 'DROP USER "demo" CASCADE')
+        self.assertIn("billing.customers", self.live.tables)
+        self.assertNotIn("demo.customers", self.live.tables)
+
+    def test_rename_schema_mssql_uses_alter_schema_transfer(self):
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "mssql", self.live, 0)
+        _build_ddl_and_update_state(
+            CreateTableOp(
+                entity_fqn="demo.customers",
+                primary_key=["customer_id"],
+                columns=[ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"})],
+            ),
+            "mssql",
+            self.live,
+            1,
+        )
+        ddl, _ = _build_ddl_and_update_state(RenameSchemaOp(from_name="demo", to_name="billing"), "mssql", self.live, 2)
+        self.assertIn("ALTER SCHEMA [billing] TRANSFER [demo].[customers]", ddl)
+        self.assertIn("DROP SCHEMA [demo]", ddl)
+
     def test_rename_table_and_columns_oracle_quoted(self):
         self.live.schemas = ["demo"]
         table_op = CreateTableOp(
