@@ -41,21 +41,22 @@ def map_type(logical_type: str, dialect: str) -> str:
 
 
 def quote_ident(ident: str, dialect: str) -> str:
-    """Экранирует имя колонки или таблицы в зависимости от диалекта СУБД."""
+    """Экранирует имя колонки или таблицы в зависимости от диалекта СУБД.
+
+    Для Oracle имя всегда заключается в двойные кавычки: без квотирования
+    Oracle нормализует идентификаторы в верхний регистр, а с квотированием
+    имена создаются в точности как в спецификации (нижний регистр).
+    """
     if dialect == "mssql":
         return f"[{ident}]"
-    if ident.startswith("_"):
-        return f'"{ident}"'
-    return ident
+    return f'"{ident}"'
 
 
 def qualify_table(schema: str, table: str, dialect: str) -> str:
     """Формирует полное квалифицированное имя таблицы schema.table с учетом диалекта."""
     if dialect == "mssql":
         return f"[{schema}].[{table}]"
-    if table.startswith("_"):
-        return f'{schema}."{table}"'
-    return f"{schema}.{table}"
+    return f'"{schema}"."{table}"'
 
 
 def render_create_table(table: TableSchema, dialect: str) -> str:
@@ -78,14 +79,16 @@ def render_create_table(table: TableSchema, dialect: str) -> str:
         col_lines = [f"  {quote_ident(c.name, dialect)} {map_type(c.type, dialect)}" for c in table.columns]
         if table.primary_key:
             pk_cols = ", ".join(quote_ident(c, dialect) for c in table.primary_key)
-            col_lines.append(f"  CONSTRAINT pk_{table.schema_}_{table.name} PRIMARY KEY ({pk_cols})")
+            pk_name = quote_ident(f"pk_{table.schema_}_{table.name}", dialect)
+            col_lines.append(f"  CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols})")
         for fk in table.foreign_keys:
             cols = ", ".join(quote_ident(c, dialect) for c in fk.columns)
             ref_schema = fk.ref_schema or table.schema_
             ref_cols = ", ".join(quote_ident(c, dialect) for c in fk.ref_columns)
             fk_name = f"fk_{table.schema_}_{table.name}_{'_'.join(fk.columns)}"[:30]
             col_lines.append(
-                f"  CONSTRAINT {fk_name} FOREIGN KEY ({cols}) REFERENCES {ref_schema}.{fk.ref_table} ({ref_cols})"
+                f"  CONSTRAINT {quote_ident(fk_name, dialect)} FOREIGN KEY ({cols})"
+                f" REFERENCES {qualify_table(ref_schema, fk.ref_table, dialect)} ({ref_cols})"
             )
 
     body = ",\n".join(col_lines)

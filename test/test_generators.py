@@ -21,6 +21,7 @@ from app.models import (
     FakerGenerator,
     ForeignKey,
     LiveSchema,
+    PatternGenerator,
     RandomDateGenerator,
     RandomDecimalGenerator,
     SequenceGenerator,
@@ -140,6 +141,34 @@ class TestGenerators(unittest.TestCase):
         val = _generate_value("name", gen=gen, col_type="string")
         self.assertIsInstance(val, str)
         self.assertTrue(len(val) > 0)
+
+    def test_pattern_generator_format(self):
+        """pattern подставляет символы по плейсхолдерам и сохраняет литералы шаблона."""
+        gen = PatternGenerator(template="40817810############")
+        for _ in range(25):
+            val = _generate_value("account_number", gen=gen, col_type="string")
+            self.assertRegex(val, r"^40817810\d{12}$")
+
+    def test_pattern_generator_placeholder_classes(self):
+        """'#' — цифры, '@' — заглавные, 'a' — строчные, '?' — буквоцифры."""
+        gen = PatternGenerator(template="AAA-####-@@@-aaa-???-ZZZ")
+        val = _generate_value("code", gen=gen, col_type="string")
+        digits, upper_rand, lower_rand, alnum = val.split("-")[1:5]
+        self.assertTrue(digits.isdigit() and len(digits) == 4)
+        self.assertTrue(upper_rand.isalpha() and upper_rand.isupper() and len(upper_rand) == 3)
+        self.assertTrue(lower_rand.isalpha() and lower_rand.islower() and len(lower_rand) == 3)
+        self.assertTrue(alnum.isalnum() and len(alnum) == 3)
+        self.assertTrue(val.startswith("AAA-") and val.endswith("-ZZZ"))
+
+    def test_pattern_generator_requires_template(self):
+        """Пустой template отклоняется валидацией модели."""
+        with self.assertRaises(ValidationError):
+            PatternGenerator(template="")
+
+    def test_pattern_generator_null_ratio(self):
+        """null_ratio=1.0 для pattern дает None."""
+        gen = PatternGenerator(template="##", null_ratio=1.0)
+        self.assertIsNone(_generate_value("code", gen=gen, col_type="string"))
 
     def test_choice_with_weights(self):
         """ChoiceGenerator валидирует веса и соблюдает распределение."""

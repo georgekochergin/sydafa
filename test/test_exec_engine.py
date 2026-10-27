@@ -150,12 +150,12 @@ class TestBatchIdAudit(unittest.TestCase):
         self.assertEqual(n, 1)
         # executed[0] — архивация снимка в _upd_customers ДО обновления
         archive_sql, archive_params = conn.cur.executed[0]
-        self.assertIn(f'INSERT INTO demo."{_upd_table_name("customers")}"', archive_sql)
+        self.assertIn(f'INSERT INTO "demo"."{_upd_table_name("customers")}"', archive_sql)
         self.assertIn(f'"{EXEC_BATCH_ID_COLUMN}"', archive_sql)
         self.assertEqual(archive_params[0], 7)  # _exec_batch_id = batch_id
         # executed[1] — UPDATE основной таблицы с _batch_id = batch_id
         update_sql, update_params = conn.cur.executed[1]
-        self.assertIn("UPDATE demo.customers", update_sql)
+        self.assertIn('UPDATE "demo"."customers"', update_sql)
         self.assertIn(f'"{BATCH_ID_COLUMN}" = :2', update_sql)
         self.assertEqual(update_params[1], 7)  # _batch_id = batch_id
         # Равенство main._batch_id == _upd._exec_batch_id
@@ -185,20 +185,20 @@ class TestBatchIdAudit(unittest.TestCase):
         )
         self.assertEqual(n, 1)
         archive_sql, archive_params = conn.cur.executed[0]
-        self.assertIn(f'INSERT INTO demo."{_del_table_name("customers")}"', archive_sql)
+        self.assertIn(f'INSERT INTO "demo"."{_del_table_name("customers")}"', archive_sql)
         self.assertEqual(archive_params[0], 9)  # _exec_batch_id = batch_id
         # executed[1] — DELETE из основной таблицы
-        self.assertIn("DELETE FROM demo.customers", conn.cur.executed[1][0])
+        self.assertIn('DELETE FROM "demo"."customers"', conn.cur.executed[1][0])
 
     def test_truncate_archives_all_to_del(self):
         live = _build_live_with_audit()
         conn = FakeConn()
         truncate_table_conn(conn, "oracle", live, "demo", "customers", batch_id=5)
         archive_sql, archive_params = conn.cur.executed[0]
-        self.assertIn(f'INSERT INTO demo."{_del_table_name("customers")}"', archive_sql)
+        self.assertIn(f'INSERT INTO "demo"."{_del_table_name("customers")}"', archive_sql)
         self.assertEqual(archive_params[0], 5)  # _exec_batch_id = batch_id
         self.assertNotIn(" WHERE ", archive_sql)  # архивируются все строки
-        self.assertIn("TRUNCATE TABLE demo.customers", conn.cur.executed[1][0])
+        self.assertIn('TRUNCATE TABLE "demo"."customers"', conn.cur.executed[1][0])
 
     def test_interleaved_ddl_and_dml_flow(self):
         """Проверка возможности чередования DDL и DML в едином эволюционном сценарии."""
@@ -338,19 +338,19 @@ class TestBatchIdAudit(unittest.TestCase):
 
         # executed[0]: выборка ROWID со случайной сортировкой
         rowid_sql, rowid_params = conn.cur.executed[0]
-        self.assertIn("SELECT ROWID FROM demo.logs", rowid_sql)
+        self.assertIn('SELECT ROWID FROM "demo"."logs"', rowid_sql)
         self.assertIn("ORDER BY dbms_random.value FETCH FIRST :2 ROWS ONLY", rowid_sql)
         self.assertEqual(rowid_params, ["ERROR", 2])
 
         # executed[1]: архивация снимка в _upd_logs по выбранным ROWID
         arch_sql, arch_params = conn.cur.executed[1]
-        self.assertIn('INSERT INTO demo."_upd_logs"', arch_sql)
+        self.assertIn('INSERT INTO "demo"."_upd_logs"', arch_sql)
         self.assertIn("WHERE ROWID IN (:2, :3)", arch_sql)
         self.assertEqual(arch_params, [21, "AAARowid1", "AAARowid2"])
 
         # executed[2]: UPDATE по выбранным ROWID
         upd_sql, upd_params = conn.cur.executed[2]
-        self.assertIn('UPDATE demo.logs SET level = :1, "_batch_id" = :2 WHERE ROWID IN (:3, :4)', upd_sql)
+        self.assertIn('UPDATE "demo"."logs" SET "level" = :1, "_batch_id" = :2 WHERE ROWID IN (:3, :4)', upd_sql)
         self.assertEqual(upd_params, ["RESOLVED", 21, "AAARowid1", "AAARowid2"])
 
         # 2. Delete N random rows without PK
@@ -378,13 +378,13 @@ class TestBatchIdAudit(unittest.TestCase):
 
         # executed[1]: архивация снимка в _del_logs
         del_arch_sql, del_arch_params = conn_del.cur.executed[1]
-        self.assertIn('INSERT INTO demo."_del_logs"', del_arch_sql)
+        self.assertIn('INSERT INTO "demo"."_del_logs"', del_arch_sql)
         self.assertIn("WHERE ROWID IN (:2, :3)", del_arch_sql)
         self.assertEqual(del_arch_params, [22, "AAARowid1", "AAARowid2"])
 
         # executed[2]: DELETE по выбранным ROWID
         del_sql, del_params = conn_del.cur.executed[2]
-        self.assertIn("DELETE FROM demo.logs WHERE ROWID IN (:1, :2)", del_sql)
+        self.assertIn('DELETE FROM "demo"."logs" WHERE ROWID IN (:1, :2)', del_sql)
         self.assertEqual(del_params, ["AAARowid1", "AAARowid2"])
 
     def test_oracle_random_rows_empty_table(self):

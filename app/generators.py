@@ -45,6 +45,26 @@ def _placeholder(dialect: str, index: int) -> str:
     return "%s" if dialect == "mssql" else f":{index}"
 
 
+_PATTERN_DIGITS = "0123456789"
+_PATTERN_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_PATTERN_LOWER = "abcdefghijklmnopqrstuvwxyz"
+_PATTERN_ALNUM = _PATTERN_DIGITS + _PATTERN_UPPER + _PATTERN_LOWER
+_PATTERN_CLASSES = {
+    "#": _PATTERN_DIGITS,
+    "@": _PATTERN_UPPER,
+    "a": _PATTERN_LOWER,
+    "?": _PATTERN_ALNUM,
+}
+
+
+def _render_pattern(template: str) -> str:
+    """Подставляет случайные символы вместо плейсхолдеров шаблона, литералы переносит как есть."""
+    return "".join(
+        random.choice(_PATTERN_CLASSES[ch]) if ch in _PATTERN_CLASSES else ch
+        for ch in template
+    )
+
+
 def _resolve_anchor_date(anchor: str) -> date:
     today = date.today()
     if anchor == "start_of_year":
@@ -126,6 +146,12 @@ def _generate_value(
         if func is None:
             func = fk.word
         return func()
+
+    if kind == "pattern":
+        template = getattr(gen, "template", None)
+        if not template:
+            raise GeneratorError("Для генератора pattern не указан обязательный параметр template")
+        return _render_pattern(template)
 
     if kind == "choice":
         values = getattr(gen, "values", [])

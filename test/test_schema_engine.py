@@ -39,7 +39,10 @@ class TestSchemaEngine(unittest.TestCase):
     def test_create_schema_oracle(self):
         op = CreateSchemaOp(name="demo")
         ddl, desc = _build_ddl_and_update_state(op, "oracle", self.live, 0)
-        self.assertTrue(any("CREATE USER demo" in stmt for stmt in ddl))
+        # Все идентификаторы Oracle квотируются: имя схемы сохраняется в нижнем регистре
+        self.assertTrue(any('CREATE USER "demo" IDENTIFIED BY sydafa' in stmt for stmt in ddl))
+        self.assertTrue(any('GRANT UNLIMITED TABLESPACE TO "demo"' in stmt for stmt in ddl))
+        self.assertTrue(any('GRANT CREATE SESSION, CREATE TABLE TO "demo"' in stmt for stmt in ddl))
         self.assertIn("demo", self.live.schemas)
 
     def _create_schema_and_table(self, dialect="mssql"):
@@ -77,9 +80,151 @@ class TestSchemaEngine(unittest.TestCase):
     def test_create_table_audit_tables_oracle_quoted(self):
         ddl, _ = self._create_schema_and_table("oracle")
         self.assertIn("demo._upd_customers", self.live.tables)
-        # В Oracle имена аудит-таблиц с подчеркиванием квотируются
-        self.assertTrue(any('CREATE TABLE demo."_upd_customers"' in s for s in ddl))
-        self.assertTrue(any('CREATE TABLE demo."_del_customers"' in s for s in ddl))
+        # В Oracle все идентификаторы квотируются и создаются в нижнем регистре
+        self.assertTrue(any('CREATE TABLE "demo"."_upd_customers"' in s for s in ddl))
+        self.assertTrue(any('CREATE TABLE "demo"."_del_customers"' in s for s in ddl))
+
+    def test_create_table_oracle_identifiers_lowercase(self):
+        """Основная таблица, колонки и констрейнты в Oracle создаются квотированными (нижний регистр)."""
+        self.live.schemas = ["demo"]
+        table_op = CreateTableOp(
+            entity_fqn="demo.customers",
+            primary_key=["customer_id"],
+            columns=[
+                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="name", type="string"),
+            ],
+        )
+        ddl, _ = _build_ddl_and_update_state(table_op, "oracle", self.live, 0)
+        create_sql = next(s for s in ddl if s.startswith('CREATE TABLE "demo"."customers"'))
+        self.assertIn('"customer_id" NUMBER(19)', create_sql)
+        self.assertIn('"name" VARCHAR2(400)', create_sql)
+        self.assertIn('"_batch_id" NUMBER(19)', create_sql)
+        self.assertIn('CONSTRAINT "pk_demo_customers" PRIMARY KEY ("customer_id")', create_sql)
+
+    def test_create_table_oracle_fk_references_quoted(self):
+        """Ссылка FOREIGN KEY в Oracle адресуется к квотированной родительской таблице."""
+        self.live.schemas = ["demo"]
+        parent_op = CreateTableOp(
+            entity_fqn="demo.parents",
+            primary_key=["parent_id"],
+            columns=[ColumnSpec(name="parent_id", type="bigint", generator={"kind": "sequence"})],
+        )
+        _build_ddl_and_update_state(parent_op, "oracle", self.live, 0)
+        child_op = CreateTableOp(
+            entity_fqn="demo.children",
+            primary_key=["child_id"],
+            columns=[ColumnSpec(name="child_id", type="bigint", generator={"kind": "sequence"}), ColumnSpec(name="parent_id")],
+            foreign_keys=[ForeignKey(columns=["parent_id"], ref_entity_fqn="demo.parents", ref_columns=["parent_id"])],
+        )
+        ddl, _ = _build_ddl_and_update_state(child_op, "oracle", self.live, 1)
+        create_sql = next(s for s in ddl if s.startswith('CREATE TABLE "demo"."children"'))
+        self.assertIn('REFERENCES "demo"."parents" ("parent_id")', create_sql)
+
+    def test_drop_schema_oracle_user_quoted(self):
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", self.live, 0)
+        ddl, _ = _build_ddl_and_update_state(DropSchemaOp(name="demo"), "oracle", self.live, 1)
+        self.assertIn('DROP USER "demo" CASCADE', ddl[0])
+
+    def test_rename_schema_oracle_moves_tables_via_ctas(self):
+        """rename_schema в Oracle переносит таблицы CTAS в новую схему, а не теряет их при DROP USER."""
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", self.live, 0)
+        _build_ddl_and_update_state(
+            CreateTableOp(
+                entity_fqn="demo.customers",
+                primary_key=["customer_id"],
+                columns=[
+                    ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                    ColumnSpec(name="name", type="string"),
+                ],
+            ),
+            "oracle",
+            self.live,
+            1,
+        )
+        ddl, _ = _build_ddl_and_update_state(RenameSchemaOp(from_name="demo", to_name="billing"), "oracle", self.live, 2)
+        self.assertIn('CREATE USER "billing" IDENTIFIED BY sydafa', ddl[0])
+        # Основная и аудит-таблицы копируются в новую схему до удаления старого пользователя
+        self.assertIn('CREATE TABLE "billing"."customers" AS SELECT * FROM "demo"."customers"', ddl)
+        self.assertIn('CREATE TABLE "billing"."_upd_customers" AS SELECT * FROM "demo"."_upd_customers"', ddl)
+        self.assertIn('CREATE TABLE "billing"."_del_customers" AS SELECT * FROM "demo"."_del_customers"', ddl)
+        # Старый пользователь удаляется последним
+        self.assertEqual(ddl[-1], 'DROP USER "demo" CASCADE')
+        self.assertIn("billing.customers", self.live.tables)
+        self.assertNotIn("demo.customers", self.live.tables)
+
+    def test_rename_schema_mssql_uses_alter_schema_transfer(self):
+        _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "mssql", self.live, 0)
+        _build_ddl_and_update_state(
+            CreateTableOp(
+                entity_fqn="demo.customers",
+                primary_key=["customer_id"],
+                columns=[ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"})],
+            ),
+            "mssql",
+            self.live,
+            1,
+        )
+        ddl, _ = _build_ddl_and_update_state(RenameSchemaOp(from_name="demo", to_name="billing"), "mssql", self.live, 2)
+        self.assertIn("ALTER SCHEMA [billing] TRANSFER [demo].[customers]", ddl)
+        self.assertIn("DROP SCHEMA [demo]", ddl)
+
+    def test_rename_table_and_columns_oracle_quoted(self):
+        self.live.schemas = ["demo"]
+        table_op = CreateTableOp(
+            entity_fqn="demo.customers",
+            primary_key=["customer_id"],
+            columns=[
+                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="name", type="string"),
+            ],
+        )
+        _build_ddl_and_update_state(table_op, "oracle", self.live, 0)
+
+        ddl, _ = _build_ddl_and_update_state(
+            RenameTableOp(entity_fqn="demo.customers", to_name="clients"), "oracle", self.live, 1
+        )
+        self.assertIn('ALTER TABLE "demo"."customers" RENAME TO "clients"', ddl[0])
+        self.assertIn('ALTER TABLE "demo"."_upd_customers" RENAME TO "_upd_clients"', ddl[1])
+
+        ddl, _ = _build_ddl_and_update_state(
+            RenameColumnOp(entity_fqn="demo.clients", from_name="name", to_name="full_name"), "oracle", self.live, 2
+        )
+        self.assertIn('ALTER TABLE "demo"."clients" RENAME COLUMN "name" TO "full_name"', ddl[0])
+
+    def test_add_drop_column_oracle_quoted(self):
+        self.live.schemas = ["demo"]
+        table_op = CreateTableOp(
+            entity_fqn="demo.customers",
+            primary_key=["customer_id"],
+            columns=[
+                ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
+                ColumnSpec(name="name", type="string"),
+            ],
+        )
+        _build_ddl_and_update_state(table_op, "oracle", self.live, 0)
+
+        add_op = AddColumnOp(entity_fqn="demo.customers", column=ColumnSpec(name="email", type="string"))
+        ddl, _ = _build_ddl_and_update_state(add_op, "oracle", self.live, 1)
+        self.assertIn('ALTER TABLE "demo"."customers" ADD ("email" VARCHAR2(400))', ddl[0])
+
+        drop_op = DropColumnOp(entity_fqn="demo.customers", name="email")
+        ddl, _ = _build_ddl_and_update_state(drop_op, "oracle", self.live, 2)
+        self.assertIn('ALTER TABLE "demo"."customers" DROP COLUMN "email"', ddl[0])
+
+    def test_transfer_table_oracle_quoted(self):
+        self.live.schemas = ["demo", "archive"]
+        table_op = CreateTableOp(
+            entity_fqn="demo.customers",
+            primary_key=["customer_id"],
+            columns=[ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"})],
+        )
+        _build_ddl_and_update_state(table_op, "oracle", self.live, 0)
+        ddl, _ = _build_ddl_and_update_state(
+            TransferTableOp(entity_fqn="demo.customers", to_schema="archive"), "oracle", self.live, 1
+        )
+        self.assertIn('CREATE TABLE "archive"."customers" AS SELECT * FROM "demo"."customers"', ddl[0])
+        self.assertIn('DROP TABLE "demo"."customers" CASCADE CONSTRAINTS', ddl[1])
 
     def test_drop_system_columns_forbidden(self):
         self._create_schema_and_table("mssql")

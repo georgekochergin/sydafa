@@ -26,7 +26,7 @@ from .models import (
     TableSchema,
     TransferTableOp,
 )
-from .render_ddl import map_type, qualify_table, render_create_table
+from .render_ddl import map_type, qualify_table, quote_ident, render_create_table
 from .schema_state import (
     append_evolution_log,
     get_live_schema,
@@ -116,9 +116,9 @@ def _build_ddl_and_update_state(
                 f"EXEC('CREATE SCHEMA [{op.name}] AUTHORIZATION [dbo]')"
             )
         else:  # oracle
-            ddl_statements.append(f"CREATE USER {op.name} IDENTIFIED BY sydafa")
-            ddl_statements.append(f"GRANT UNLIMITED TABLESPACE TO {op.name}")
-            ddl_statements.append(f"GRANT CREATE SESSION, CREATE TABLE TO {op.name}")
+            ddl_statements.append(f"CREATE USER {quote_ident(op.name, dialect)} IDENTIFIED BY sydafa")
+            ddl_statements.append(f"GRANT UNLIMITED TABLESPACE TO {quote_ident(op.name, dialect)}")
+            ddl_statements.append(f"GRANT CREATE SESSION, CREATE TABLE TO {quote_ident(op.name, dialect)}")
         live.schemas.append(op.name)
         desc = f"Создана схема '{op.name}'"
 
@@ -136,7 +136,7 @@ def _build_ddl_and_update_state(
         if dialect == "mssql":
             ddl_statements.append(f"DROP SCHEMA [{op.name}]")
         else:
-            ddl_statements.append(f"DROP USER {op.name} CASCADE")
+            ddl_statements.append(f"DROP USER {quote_ident(op.name, dialect)} CASCADE")
         live.schemas.remove(op.name)
         desc = f"Удалена схема '{op.name}'"
 
@@ -156,12 +156,17 @@ def _build_ddl_and_update_state(
                 ddl_statements.append(f"ALTER SCHEMA [{op.to_name}] TRANSFER [{op.from_name}].[{t.name}]")
             ddl_statements.append(f"DROP SCHEMA [{op.from_name}]")
         else:
-            ddl_statements.append(f"CREATE USER {op.to_name} IDENTIFIED BY sydafa")
-            ddl_statements.append(f"GRANT UNLIMITED TABLESPACE TO {op.to_name}")
-            ddl_statements.append(f"GRANT CREATE SESSION, CREATE TABLE TO {op.to_name}")
+            ddl_statements.append(f"CREATE USER {quote_ident(op.to_name, dialect)} IDENTIFIED BY sydafa")
+            ddl_statements.append(f"GRANT UNLIMITED TABLESPACE TO {quote_ident(op.to_name, dialect)}")
+            ddl_statements.append(f"GRANT CREATE SESSION, CREATE TABLE TO {quote_ident(op.to_name, dialect)}")
+            # Oracle не умеет переносить таблицы между схемами ALTER-командой:
+            # копируем данные CTAS в новую схему, затем удаляем старого пользователя вместе с его таблицами
             for t in tables_to_move:
-                ddl_statements.append(f"ALTER TABLE {op.from_name}.{t.name} RENAME TO {t.name}")
-            ddl_statements.append(f"DROP USER {op.from_name} CASCADE")
+                ddl_statements.append(
+                    f"CREATE TABLE {qualify_table(op.to_name, t.name, dialect)} "
+                    f"AS SELECT * FROM {qualify_table(op.from_name, t.name, dialect)}"
+                )
+            ddl_statements.append(f"DROP USER {quote_ident(op.from_name, dialect)} CASCADE")
 
         # Обновление схемы в live
         live.schemas.remove(op.from_name)
@@ -294,9 +299,15 @@ def _build_ddl_and_update_state(
             ddl_statements.append(f"EXEC sp_rename '[{op.schema_}].[{old_upd}]', '{new_upd}'")
             ddl_statements.append(f"EXEC sp_rename '[{op.schema_}].[{old_del}]', '{new_del}'")
         else:
-            ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.from_name} RENAME TO {op.to_name}")
-            ddl_statements.append(f'ALTER TABLE {op.schema_}."{old_upd}" RENAME TO "{new_upd}"')
-            ddl_statements.append(f'ALTER TABLE {op.schema_}."{old_del}" RENAME TO "{new_del}"')
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, op.from_name, dialect)} RENAME TO {quote_ident(op.to_name, dialect)}"
+            )
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, old_upd, dialect)} RENAME TO {quote_ident(new_upd, dialect)}"
+            )
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, old_del, dialect)} RENAME TO {quote_ident(new_del, dialect)}"
+            )
 
         table_obj = live.tables.pop(old_key)
         table_obj.name = op.to_name
@@ -333,17 +344,20 @@ def _build_ddl_and_update_state(
             ddl_statements.append(f"ALTER SCHEMA [{op.to_schema}] TRANSFER [{op.from_schema}].[{del_name}]")
         else:
             ddl_statements.append(
-                f'CREATE TABLE "{op.to_schema}"."{op.table}" AS SELECT * FROM "{op.from_schema}"."{op.table}"'
+                f"CREATE TABLE {qualify_table(op.to_schema, op.table, dialect)} "
+                f"AS SELECT * FROM {qualify_table(op.from_schema, op.table, dialect)}"
             )
-            ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{op.table}" CASCADE CONSTRAINTS')
+            ddl_statements.append(f"DROP TABLE {qualify_table(op.from_schema, op.table, dialect)} CASCADE CONSTRAINTS")
             ddl_statements.append(
-                f'CREATE TABLE "{op.to_schema}"."{upd_name}" AS SELECT * FROM "{op.from_schema}"."{upd_name}"'
+                f"CREATE TABLE {qualify_table(op.to_schema, upd_name, dialect)} "
+                f"AS SELECT * FROM {qualify_table(op.from_schema, upd_name, dialect)}"
             )
-            ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{upd_name}" CASCADE CONSTRAINTS')
+            ddl_statements.append(f"DROP TABLE {qualify_table(op.from_schema, upd_name, dialect)} CASCADE CONSTRAINTS")
             ddl_statements.append(
-                f'CREATE TABLE "{op.to_schema}"."{del_name}" AS SELECT * FROM "{op.from_schema}"."{del_name}"'
+                f"CREATE TABLE {qualify_table(op.to_schema, del_name, dialect)} "
+                f"AS SELECT * FROM {qualify_table(op.from_schema, del_name, dialect)}"
             )
-            ddl_statements.append(f'DROP TABLE "{op.from_schema}"."{del_name}" CASCADE CONSTRAINTS')
+            ddl_statements.append(f"DROP TABLE {qualify_table(op.from_schema, del_name, dialect)} CASCADE CONSTRAINTS")
 
         table_obj = live.tables.pop(old_key)
         table_obj.schema_ = op.to_schema
@@ -379,7 +393,10 @@ def _build_ddl_and_update_state(
         if dialect == "mssql":
             ddl_statements.append(f"ALTER TABLE [{op.schema_}].[{op.table}] ADD [{op.column.name}] {col_type_sql} NULL")
         else:
-            ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.table} ADD ({op.column.name} {col_type_sql})")
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, op.table, dialect)} "
+                f"ADD ({quote_ident(op.column.name, dialect)} {col_type_sql})"
+            )
 
         table_obj.columns.append(op.column)
         ddl_statements.extend(_recreate_audit_tables_ddl(table_obj, dialect, live))
@@ -402,7 +419,9 @@ def _build_ddl_and_update_state(
         if dialect == "mssql":
             ddl_statements.append(f"ALTER TABLE [{op.schema_}].[{op.table}] DROP COLUMN [{op.name}]")
         else:
-            ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.table} DROP COLUMN {op.name}")
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, op.table, dialect)} DROP COLUMN {quote_ident(op.name, dialect)}"
+            )
 
         table_obj.columns = [c for c in table_obj.columns if c.name != op.name]
         ddl_statements.extend(_recreate_audit_tables_ddl(table_obj, dialect, live))
@@ -427,7 +446,10 @@ def _build_ddl_and_update_state(
                 f"EXEC sp_rename '[{op.schema_}].[{op.table}].[{op.from_name}]', '{op.to_name}', 'COLUMN'"
             )
         else:
-            ddl_statements.append(f"ALTER TABLE {op.schema_}.{op.table} RENAME COLUMN {op.from_name} TO {op.to_name}")
+            ddl_statements.append(
+                f"ALTER TABLE {qualify_table(op.schema_, op.table, dialect)} "
+                f"RENAME COLUMN {quote_ident(op.from_name, dialect)} TO {quote_ident(op.to_name, dialect)}"
+            )
 
         for c in table_obj.columns:
             if c.name == op.from_name:
