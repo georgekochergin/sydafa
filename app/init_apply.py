@@ -211,7 +211,9 @@ def check_and_heal_orphaned_state() -> None:
             if is_match or (labels.get("sydafa.managed") == "true" and (not prefix or labels.get("sydafa.prefix") == prefix)):
                 logger.warning("Self-Healing: удаление осиротевшего тома %s (пустой /state)", v_name)
                 try:
-                    v.remove(force=True)
+                    from .container_manager import reset_data_volume
+
+                    reset_data_volume(client, v)
                     healed_volumes += 1
                 except Exception as ex:
                     logger.warning("Не удалось удалить volume %s: %s", v_name, ex)

@@ -62,6 +62,7 @@ if [ "$RUN_UNIT" = true ]; then
 fi
 
 # ==================== 2. E2E-тестирование ====================
+SYDAFA_TEST_COMPOSE=1 python3 test/test_compose_cleanup.py || exit $?
 WORK_DIR=$(pwd)
 TEST_ID="$$"
 TEST_NET="sydafa-test-net-${TEST_ID}"

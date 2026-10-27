@@ -14,6 +14,7 @@ description: Use when the user asks to generate JSON request bodies for the syda
 > параметров генераторов (`sequence`, `uuid`, `faker`, `choice`, `random_decimal`, `random_date`, `date_offset`, а также `null_ratio`, `weights`, `locale`, `dim`),
 > поведения таблиц аудита (`_upd_`, `_del_`) и правил валидации зафиксированы в основном файле проекта: [README.md](../../../README.md) (Раздел 7 «Транзакционная эволюция схем и управление данными (`POST /sources/{source}/migrate`)»).
 > Настоящий скилл ссылается на `README.md` и служит исключительно для быстрой сборки JSON-спецификаций из текста.
+> Жизненный цикл контейнеров и томов описан в README, раздел «Очистка динамических источников в Docker Compose»; `deactivate` останавливает СУБД, но не заменяет полную очистку Compose.
 
 ## Формат ответа (обязательный)
 
