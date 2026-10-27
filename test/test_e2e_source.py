@@ -60,17 +60,21 @@ def _sydafa_container(prefix: str) -> str:
 
 
 def _tbl(source: str, schema: str, name: str) -> str:
-    """Квалифицированное имя таблицы для диалекта источника."""
+    """Квалифицированное имя таблицы для диалекта источника.
+
+    В Oracle все идентификаторы создаются квотированными (нижний регистр),
+    поэтому и обращения к таблицам строятся в квотированном виде.
+    """
     if source == "mssql":
         return f"[{schema}].[{name}]"
-    return f'{schema}."{name}"' if name.startswith("_") else f"{schema}.{name}"
+    return f'"{schema}"."{name}"'
 
 
 def _col(source: str, name: str) -> str:
-    """Имя колонки с учетом диалекта (системные колонки с _ квотируются в Oracle)."""
+    """Имя колонки с учетом диалекта (в Oracle всегда квотируется)."""
     if source == "mssql":
         return f"[{name}]"
-    return f'"{name}"' if name.startswith("_") else name
+    return f'"{name}"'
 
 
 def scalar(source: str, prefix: str, sql: str) -> str:
@@ -109,6 +113,7 @@ def wait_ready(base_url: str, source: str, timeout: int = 180):
 
 def run_source_e2e(base_url: str, source: str):
     print(f"\n=== Начало e2e-тестирования источника '{source}' ===")
+    prefix = os.environ.get("SYDAFA_E2E_PREFIX", "")
 
     # 1. Готовность
     ok = wait_ready(base_url, source)
@@ -177,6 +182,20 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: _upd_categories exists", f"{schema_name}._upd_categories" in tables_meta, True)
     check(f"{source}: _del_categories exists", f"{schema_name}._del_categories" in tables_meta, True)
 
+    # 3.2. Oracle: идентификаторы схемы и таблиц в словаре БД хранятся в нижнем регистре
+    # (полное соответствие спецификации, без нормализации Oracle в верхний регистр)
+    if source == "oracle" and prefix:
+        dict_tables = scalar(
+            source, prefix,
+            f"SELECT listagg(table_name, ',') WITHIN GROUP (ORDER BY table_name) FROM all_tables "
+            f"WHERE owner = '{schema_name}'",
+        )
+        check(
+            f"{source}: dictionary tables are lowercase",
+            dict_tables,
+            "categories,items,_upd_categories,_del_categories,_upd_items,_del_items",
+        )
+
     # 4. DML: Попытка append в дочернюю таблицу при пустом родителе -> 409
     bad_fk_append = [{"op": "append", "entity_fqn": f"{schema_name}.items", "rows": 1}]
     code, _ = http("POST", f"{base_url}/sources/{source}/migrate", {"operations": bad_fk_append})
@@ -203,7 +222,6 @@ def run_source_e2e(base_url: str, source: str):
     check(f"{source}: exec update rows", code, 200)
 
     # 5.1. Снимок в _upd_: _exec_batch_id == main._batch_id и сохранение старого _batch_id
-    prefix = os.environ.get("SYDAFA_E2E_PREFIX", "")
     if prefix:
         main_batch = scalar(source, prefix, f"SELECT {_col(source, '_batch_id')} FROM {_tbl(source, schema_name, 'categories')} WHERE {_col(source, 'cat_id')}=1")
         upd_exec = scalar(source, prefix, f"SELECT {_col(source, '_exec_batch_id')} FROM {_tbl(source, schema_name, '_upd_categories')} WHERE {_col(source, 'cat_id')}=1")
