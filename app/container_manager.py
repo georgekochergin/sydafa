@@ -167,9 +167,18 @@ def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
                         cur = conn.cursor()
                         cur.execute("SELECT open_mode FROM v$database")
                         row = cur.fetchone()
+                        # Корень CDB открывается раньше PDB sydafa: готовность
+                        # только по корню пропускает окно, когда PDB ещё MOUNTED,
+                        # и первый же клиент получает ORA-65024.
+                        cur.execute(f"SELECT open_mode FROM v$pdbs WHERE UPPER(name) = '{SYDAFA_DB.upper()}'")
+                        pdb = cur.fetchone()
                         conn.close()
-                        if row and row[0] == "READ WRITE":
+                        # Отсутствие PDB законно только при первичном bootstrap —
+                        # её создаст provisioning; иначе ждём READ WRITE.
+                        if row and row[0] == "READ WRITE" and (pdb is None or pdb[0] == "READ WRITE"):
                             return
+                        if pdb is not None:
+                            last_err = RuntimeError(f"PDB {SYDAFA_DB} open_mode={pdb[0]}")
                     except Exception as sys_err:
                         last_err = sys_err
             else:

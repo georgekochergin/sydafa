@@ -29,6 +29,16 @@ def _sydafa_ready_oracle(source_name: str) -> bool:
         return False
 
 
+def _is_pdb_open_in_progress(exc: Exception) -> bool:
+    """True, если ошибка ALTER PLUGGABLE DATABASE OPEN означает переходное состояние PDB.
+
+    PDB может открываться сама или другой сессией: ORA-65054/ORA-65024 и
+    "already open" уходят в ожидание готовности сервиса ниже, а не наружу.
+    """
+    text = str(exc)
+    return any(marker in text for marker in ("65054", "65024")) or "already open" in text.lower()
+
+
 def _ensure_mssql_reader(source_name: str, reader_user: str = READER_USER) -> None:
     with mssql_connection(source_name=source_name, database=SYDAFA_DB, autocommit=True) as conn:
         cur = conn.cursor()
@@ -103,16 +113,29 @@ def provision_mssql(source_name: str, config: SourceConfig) -> None:
 
 
 def _ensure_oracle_reader(source_name: str, reader_user: str = READER_USER) -> None:
+    """Создает/проверяет публичного читателя в PDB и выдает ему права.
+
+    Помимо чтения данных (SELECT ANY TABLE) читатель получает SELECT ANY
+    DICTIONARY — только для мониторинга активных сессий (v$session), включая
+    наблюдение параллельного JDBC-чтения. Выдача выполняется из сессии
+    SYSDBA: у dba_user есть SYSDBA CONTAINER=ALL, а обычная сессия с ролью
+    DBA не может выдать системную привилегию словаря.
+    """
+    import oracledb
+
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
-            with oracle_connection(source_name=source_name, service_name=SYDAFA_DB) as conn:
+            with oracle_connection(
+                source_name=source_name, service_name=SYDAFA_DB, mode=oracledb.AUTH_MODE_SYSDBA
+            ) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT username FROM all_users WHERE UPPER(username) = UPPER('{reader_user}')")
                 if not cur.fetchone():
                     cur.execute(f'CREATE USER {reader_user} IDENTIFIED BY "{reader_user}"')
                 cur.execute(f"GRANT CREATE SESSION TO {reader_user}")
                 cur.execute(f"GRANT SELECT ANY TABLE TO {reader_user}")
+                cur.execute(f"GRANT SELECT ANY DICTIONARY TO {reader_user}")
                 return
         except Exception:
             time.sleep(2)
@@ -163,8 +186,8 @@ def provision_oracle(source_name: str, config: SourceConfig) -> None:
                 try:
                     cur.execute(f"ALTER PLUGGABLE DATABASE {SYDAFA_DB} OPEN")
                 except Exception as e:
-                    if "65054" in str(e) or "already open" in str(e).lower():
-                        logger.info("PDB '%s' уже находится в процессе открытия (%s)", SYDAFA_DB, e)
+                    if _is_pdb_open_in_progress(e):
+                        logger.info("PDB '%s' ещё открывается, ожидаем готовности сервиса (%s)", SYDAFA_DB, e)
                     else:
                         raise
     finally:

@@ -11,14 +11,18 @@ from . import container_manager, exec_engine, rules_state, schema_state, sources
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
 from .exec_engine import ExecError
 from .models import (
+    GeneratorSpec,
     LiveSchema,
     MigrateRequest,
     MigrateResult,
     SourceInfo,
     SourceLifecycleStatus,
     SourceReinitResult,
+    TableInvariant,
     TableRef,
     TableRuleProfile,
+    validate_entity_fqn,
+    validate_identifier,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -211,6 +215,94 @@ def list_source_rules(source: str):
     """Возвращает все зарегистрированные профили правил генерации для источника."""
     _assert_source(source)
     return rules_state.get_all_rules(source)
+
+
+def _rules_profile_or_404(source: str, entity_fqn: str) -> TableRuleProfile:
+    """Загружает профиль правил таблицы или отвечает 422/404; возвращает независимую копию."""
+    try:
+        validate_entity_fqn(entity_fqn)
+        profile = rules_state.get_table_rules(source, entity_fqn)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Для сущности '{entity_fqn}' правила генерации не найдены")
+    return profile.model_copy(deep=True)
+
+
+# Точечные маршруты объявлены до маршрутов с {entity_fqn:path}: жадный
+# path-конвертер иначе перехватывал бы вложенные пути columns/... и invariants/...
+
+
+@app.put("/sources/{source}/rules/{entity_fqn}/columns/{column}", response_model=TableRuleProfile)
+def set_column_generator(source: str, entity_fqn: str, column: str, generator: GeneratorSpec):
+    """Назначает или заменяет генератор одной колонки, не затрагивая остальной профиль."""
+    _assert_source(source)
+    try:
+        validate_identifier(column)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    profile = _rules_profile_or_404(source, entity_fqn)
+    profile.columns[column] = generator
+    rules_state.set_table_rules(source, entity_fqn, profile)
+    return profile
+
+
+@app.delete("/sources/{source}/rules/{entity_fqn}/columns/{column}", response_model=TableRuleProfile)
+def delete_column_generator(source: str, entity_fqn: str, column: str):
+    """Удаляет правило генерации одной колонки, не затрагивая остальной профиль."""
+    _assert_source(source)
+    profile = _rules_profile_or_404(source, entity_fqn)
+    if column not in profile.columns:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"У сущности '{entity_fqn}' нет правила для колонки '{column}'"
+        )
+    del profile.columns[column]
+    rules_state.set_table_rules(source, entity_fqn, profile)
+    return profile
+
+
+@app.post("/sources/{source}/rules/{entity_fqn}/invariants", response_model=TableRuleProfile)
+def add_table_invariant(
+    source: str,
+    entity_fqn: str,
+    invariant: TableInvariant,
+    validate_existing: bool = Query(
+        default=False,
+        description="Если True, проверяет существующие данные в СУБД на соответствие инварианту и падает с 422 при нарушениях. По умолчанию False (мягкий режим).",
+    ),
+    request: Request = None,
+):
+    """Добавляет один инвариант связности к профилю таблицы."""
+    _assert_source(source)
+    profile = _rules_profile_or_404(source, entity_fqn)
+    if any(existing == invariant for existing in profile.invariants):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Инвариант уже зарегистрирован для '{entity_fqn}'")
+    profile.invariants.append(invariant)
+    try:
+        if validate_existing:
+            if hasattr(invariant, "validate_existing"):
+                invariant.validate_existing = True
+            request_host = request.url.hostname if request else None
+            _wake(source, request_host=request_host)
+            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
+        rules_state.set_table_rules(source, entity_fqn, profile)
+    except ValueError as err:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
+    return profile
+
+
+@app.delete("/sources/{source}/rules/{entity_fqn}/invariants/{invariant_index:int}", response_model=TableRuleProfile)
+def remove_table_invariant(source: str, entity_fqn: str, invariant_index: int):
+    """Удаляет инвариант связности по его позиции в списке инвариантов таблицы."""
+    _assert_source(source)
+    profile = _rules_profile_or_404(source, entity_fqn)
+    if not 0 <= invariant_index < len(profile.invariants):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"У '{entity_fqn}' нет инварианта с индексом {invariant_index}"
+        )
+    profile.invariants.pop(invariant_index)
+    rules_state.set_table_rules(source, entity_fqn, profile)
+    return profile
 
 
 @app.get("/sources/{source}/rules/{entity_fqn:path}", response_model=TableRuleProfile)
