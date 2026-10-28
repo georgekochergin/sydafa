@@ -1,6 +1,6 @@
 ---
 name: pull-request
-description: Use when the user asks to create, update, or format a pull request in the sydafa repository (open a PR, push a branch kodik/*, prepare a PR title/description), or when gh commands fail with an authentication error. Covers the mandatory `gh auth status` pre-check, the `gh auth login -h github.com -p https -w` fallback, and the required detailed PR description structure. Never merge PRs.
+description: Use when the user asks to create, update, or format a pull request in the sydafa repository (open a PR, push a branch named after the authenticated gh user, prepare a PR title/description), or when gh commands fail with an authentication error. Covers the mandatory `gh auth status` pre-check, the `gh auth login -h github.com -p https -w` fallback, the `<username>/<name>` branch prefix convention, and the required detailed PR description structure. Never merge PRs.
 ---
 
 # sydafa: создание и оформление Pull Request (gh)
@@ -12,7 +12,7 @@ description: Use when the user asks to create, update, or format a pull request 
 
 ## Ключевые правила (из AGENTS.md, действуют всегда)
 
-- Изменения оформляются в ветке с префиксом `kodik/` (например, `kodik/feature-name`); коммитить напрямую в `main` запрещено.
+- Изменения оформляются в ветке с префиксом — именем пользователя аутентифицированного аккаунта `gh`: `<username>/<name>` (например, `georgekochergin/feature-name`); коммитить напрямую в `main` запрещено. Имя пользователя определяется на шаге проверки `gh auth status` (см. ниже).
 - **Мерж запрещён**: никогда не выполняй `gh pr merge`, `git merge` в `main`, `git push` в `main` и мерж через GitHub API. Мерж осуществляет строго пользователь.
 - **Один PR на задачу/диалог** без явного разрешения пользователя: доработки по замечаниям добавляй коммитами в ту же ветку и обновляй тот же PR, а не открывай новый.
 
@@ -24,10 +24,12 @@ description: Use when the user asks to create, update, or format a pull request 
 gh auth status
 ```
 
-Успех — в выводе есть `✓ Logged in to github.com account ...` для хоста `github.com`
-(команда возвращает ненулевой код, если аутентификации нет). Если вывод сообщает об
-отсутствии логина на `github.com` — не запускай команды `gh` (они упадут с 401),
-а действуй по разделу «Нет аутентификации» ниже и передай инициативу пользователю.
+Успех — в выводе есть `✓ Logged in to github.com account <username>` для хоста `github.com`
+(команда возвращает ненулевой код, если аутентификации нет). **Сразу зафиксируй
+`<username>` — это префикс ветки задачи**; для машинночитаемого получения логина
+используй `gh api user --jq .login`. Если вывод сообщает об отсутствии логина на
+`github.com` — не запускай команды `gh` (они упадут с 401), а действуй по разделу
+«Нет аутентификации» ниже и передай инициативу пользователю.
 
 ### 2. Нет аутентификации — порекомендуй пользователю
 
@@ -60,13 +62,13 @@ gh auth status
 
 ### 3. Подготовь ветку и изменения
 
-1. Убедись, что работа ведётся в ветке `kodik/<name>`, созданной от актуального `main`.
+1. Убедись, что работа ведётся в ветке `<username>/<name>` (префикс — логин из шага 1), созданной от актуального `main`; если ветки ещё нет — `git checkout -b <username>/<name>`.
 2. Закоммить изменения (сообщение — в стиле истории репозитория: `feat:` / `fix:` / `docs:` / `refact`, возможно со скоупом `fix(oracle):`; язык заголовков — как в истории, чаще русский).
 
 ### 4. Запушь и создай PR
 
 ```bash
-git push -u origin kodik/<name>
+git push -u origin <username>/<name>
 gh pr create --title "<заголовок>" --body "<description>"
 ```
 
@@ -126,7 +128,7 @@ gh pr edit <номер> --title "<заголовок>" --body "<description>"
 
 ## Чек-лист перед созданием PR
 
-- [ ] Ветка `kodik/<name>` от актуального `main`, прямых коммитов в `main` нет.
+- [ ] Ветка `<username>/<name>` от актуального `main` (префикс — логин аутентифицированного пользователя `gh`), прямых коммитов в `main` нет.
 - [ ] `gh auth status` проверен; аутентификация на `github.com` есть.
 - [ ] Все изменения задачи закоммичены в эту ветку (один PR на задачу/диалог).
 - [ ] Тесты запущены; для docs-only — проверки выполнены и описаны.
