@@ -1,9 +1,9 @@
-"""Тесты классификации переходных ошибок открытия PDB в provisioning Oracle."""
+"""Тесты классификации переходных ошибок открытия PDB в runtime Oracle."""
 from __future__ import annotations
 
 import unittest
 
-from app.provisioning import _is_pdb_open_in_progress
+from app.backends.rdbms.oracle.runtime import _is_pdb_open_in_progress
 
 
 class TestIsPdbOpenInProgress(unittest.TestCase):

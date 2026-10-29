@@ -13,16 +13,11 @@ from typing import Any
 import docker
 from docker.errors import NotFound
 
-from .constants import (
-    CONTAINER_PREFIX,
-    DATA_VOLUME_PATHS,
-    DEFAULT_INTERNAL_PORTS,
-    DEFAULT_TTL_MINUTES,
-    READER_PASSWORD,
-    READER_USER,
-    SOURCE_IMAGES,
-    SYDAFA_DB,
-)
+from .backends import registry
+from .backends.contracts import ReadyContext
+from . import constants
+from .constants import DEFAULT_TTL_MINUTES
+from .naming import container_name_for, sanitize_user_token, volume_name_for
 from .models import ConnectionDetails, SourceConfig
 from .secrets import get_secrets
 from .sources import get_source
@@ -39,44 +34,6 @@ def _source_lock(source: str) -> threading.Lock:
         if source not in _locks:
             _locks[source] = threading.RLock()
         return _locks[source]
-
-
-def sanitize_user_token(token: str | None) -> str:
-    """Очищает пользовательский токен (префикс или имя инстанса) от пробелов, краевых дефисов и спецсимволов."""
-    if not token:
-        return ""
-    # Заменяем недопустимые спецсимволы и пробелы на дефис
-    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(token).strip())
-    # Убираем дефисы, точки и подчеркивания по краям и приводим к нижнему регистру
-    return cleaned.strip("-._").lower()
-
-
-def container_name_for(config: SourceConfig) -> str:
-    prefix = sanitize_user_token(CONTAINER_PREFIX)
-    src_name = sanitize_user_token(config.name)
-    parts: list[str] = []
-    if prefix.startswith("sydafa"):
-        parts.append(prefix)
-    else:
-        parts.append("sydafa")
-        if prefix:
-            parts.append(prefix)
-    parts.extend(["src", config.type, src_name])
-    return "-".join(parts)
-
-
-def volume_name_for(config: SourceConfig) -> str:
-    prefix = sanitize_user_token(CONTAINER_PREFIX)
-    src_name = sanitize_user_token(config.name)
-    parts: list[str] = []
-    if prefix.startswith("sydafa"):
-        parts.append(prefix)
-    else:
-        parts.append("sydafa")
-        if prefix:
-            parts.append(prefix)
-    parts.extend(["data", config.type, src_name])
-    return "-".join(parts)
 
 
 def _get_docker_client() -> docker.DockerClient:
@@ -110,85 +67,34 @@ def _wait_for_port(host: str, port: int, timeout: int = 120) -> None:
     raise TimeoutError(f"Таймаут ожидания порта {host}:{port} ({timeout}s)")
 
 
-def _wait_for_db_ready(config: SourceConfig, timeout: int = 180) -> None:
-    """Готовность: сначала dba_user (после provisioning), иначе bootstrap sa/SYS."""
-    from . import init_apply
-    secrets = get_secrets()
-    deadline = time.time() + timeout
-    last_err: Exception | None = None
-    is_init = init_apply.is_source_initialized(config.name)
+def _wait_for_db_ready(config: SourceConfig, timeout: int | None = None) -> None:
+    """Цикл готовности: общий deadline/retry, одну попытку проверки делает backend.
 
-    db_host = container_name_for(config)
+    Порядок vendor-fallback (dba_user -> sa/SYS, CDB/PDB READ WRITE) полностью
+    принадлежит runtime-провайдеру движка; TCP-порт readiness не заменяет.
+    """
+    from . import init_apply
+
+    backend = registry.require(config.type)
+    if timeout is None:
+        timeout = backend.runtime.startup_timeout
+    ctx = ReadyContext(
+        config=config,
+        secrets=get_secrets(),
+        is_initialized=init_apply.is_source_initialized(config.name),
+        endpoint_host=container_name_for(config),
+    )
+    deadline = time.time() + timeout
+    last_reason: str | None = None
     while time.time() < deadline:
-        try:
-            if config.type == "mssql":
-                import pymssql
-                try:
-                    conn = pymssql.connect(
-                        server=db_host,
-                        port=config.port,
-                        user=secrets.dba_user,
-                        password=secrets.dba_password,
-                        database=SYDAFA_DB,
-                        login_timeout=3,
-                    )
-                    conn.close()
-                    return
-                except Exception as e:
-                    last_err = e
-                    try:
-                        conn = pymssql.connect(
-                            server=db_host,
-                            port=config.port,
-                            user="sa",
-                            password=secrets.mssql_sa_password,
-                            database="master",
-                            login_timeout=3,
-                        )
-                        conn.close()
-                        return
-                    except Exception as sa_err:
-                        last_err = sa_err
-            elif config.type == "oracle":
-                import oracledb
-                try:
-                    dsn = oracledb.makedsn(db_host, config.port, service_name=SYDAFA_DB)
-                    conn = oracledb.connect(user=secrets.dba_user, password=secrets.dba_password, dsn=dsn)
-                    conn.close()
-                    return
-                except Exception as e:
-                    last_err = e
-                    try:
-                        dsn = oracledb.makedsn(db_host, config.port, service_name="FREE")
-                        conn = oracledb.connect(
-                            user="SYS",
-                            password=secrets.oracle_sys_password,
-                            dsn=dsn,
-                            mode=oracledb.AUTH_MODE_SYSDBA,
-                        )
-                        cur = conn.cursor()
-                        cur.execute("SELECT open_mode FROM v$database")
-                        row = cur.fetchone()
-                        # Корень CDB открывается раньше PDB sydafa: готовность
-                        # только по корню пропускает окно, когда PDB ещё MOUNTED,
-                        # и первый же клиент получает ORA-65024.
-                        cur.execute(f"SELECT open_mode FROM v$pdbs WHERE UPPER(name) = '{SYDAFA_DB.upper()}'")
-                        pdb = cur.fetchone()
-                        conn.close()
-                        # Отсутствие PDB законно только при первичном bootstrap —
-                        # её создаст provisioning; иначе ждём READ WRITE.
-                        if row and row[0] == "READ WRITE" and (pdb is None or pdb[0] == "READ WRITE"):
-                            return
-                        if pdb is not None:
-                            last_err = RuntimeError(f"PDB {SYDAFA_DB} open_mode={pdb[0]}")
-                    except Exception as sys_err:
-                        last_err = sys_err
-            else:
-                raise ValueError(f"Неизвестный тип СУБД '{config.type}'")
-        except Exception as e:
-            last_err = e
+        result = backend.runtime.probe_ready(ctx)
+        if result.ready:
+            return
+        last_reason = result.reason
         time.sleep(2)
-    raise TimeoutError(f"Таймаут ожидания готовности {config.type} {config.host}:{config.port}: {last_err}")
+    raise TimeoutError(
+        f"Таймаут ожидания готовности {config.type} {config.host}:{config.port}: {last_reason}"
+    )
 
 
 def _ensure_volume(client: docker.DockerClient, volume_name: str) -> None:
@@ -230,22 +136,10 @@ def build_connection_details(
     db_host = container_name_for(config)
     host = "localhost" if is_external else (request_host or db_host)
 
-    if config.type == "mssql":
-        jdbc_url = f"jdbc:sqlserver://{host}:{port};databaseName={SYDAFA_DB};trustServerCertificate=true;encrypt=false"
-    elif config.type == "oracle":
-        jdbc_url = f"jdbc:oracle:thin:@//{host}:{port}/{SYDAFA_DB}"
-    else:
-        jdbc_url = f"jdbc:{config.type}://{host}:{port}/{SYDAFA_DB}"
-
-    return ConnectionDetails(
-        type=config.type,
-        host=host,
-        port=port,
-        database=SYDAFA_DB,
-        user=READER_USER,
-        password=READER_PASSWORD,
-        jdbc_url=jdbc_url,
-    )
+    # Чистый вызов backend: политика external/internal endpoint — общая,
+    # формат URL и учётные данные читателя — у движка. Неизвестный тип
+    # здесь получает явный отказ, а не универсальный запасной JDBC URL.
+    return registry.require(config.type).describe_connection(host, port)
 
 
 def _run_container(
@@ -253,20 +147,18 @@ def _run_container(
     source_name: str,
     config: SourceConfig,
 ) -> Any:
-    image_name = SOURCE_IMAGES.get(config.type)
-    if not image_name:
-        raise ValueError(f"Неизвестный тип СУБД '{config.type}' для источника '{source_name}'")
+    backend = registry.require(config.type)
+    secrets = get_secrets()
+    spec = backend.runtime.build_container_spec(config, secrets)
 
     network_name, project_name = _get_context(client)
     name = container_name_for(config)
     volume_name = volume_name_for(config)
-    data_path = DATA_VOLUME_PATHS[config.type]
     _ensure_volume(client, volume_name)
 
-    secrets = get_secrets()
     labels = {
         "sydafa.managed": "true",
-        "sydafa.prefix": CONTAINER_PREFIX,
+        "sydafa.prefix": constants.CONTAINER_PREFIX,
         "sydafa.source": source_name,
     }
     if project_name:
@@ -277,15 +169,7 @@ def _run_container(
             "com.docker.compose.oneoff": "False",
             "com.docker.compose.container-number": "1",
         })
-    environment: dict[str, str] = {}
-    if config.type == "mssql":
-        environment = {
-            "ACCEPT_EULA": "Y",
-            "MSSQL_SA_PASSWORD": secrets.mssql_sa_password,
-            "MSSQL_PID": "Developer",
-        }
-    elif config.type == "oracle":
-        environment = {"ORACLE_PASSWORD": secrets.oracle_sys_password}
+    environment = dict(spec.environment)
 
     ports = None
     if config.external_port:
@@ -294,12 +178,12 @@ def _run_container(
     logger.info(
         "Создание контейнера %s (образ %s, volume %s, ports=%s)...",
         name,
-        image_name,
+        spec.image,
         volume_name,
         ports,
     )
     container = client.containers.run(
-        image=image_name,
+        image=spec.image,
         name=name,
         hostname=name,
         detach=True,
@@ -307,7 +191,7 @@ def _run_container(
         ports=ports,
         network=network_name,
         labels=labels,
-        volumes={volume_name: {"bind": data_path, "mode": "rw"}},
+        volumes={volume_name: {"bind": spec.data_path, "mode": "rw"}},
     )
     if name != config.host:
         try:
@@ -381,7 +265,7 @@ def wake_up(
             logger.info("Запуск контейнера %s...", name)
             container.start()
 
-        timeout = 180 if config.type == "oracle" else 90
+        timeout = registry.require(config.type).runtime.startup_timeout
         logger.info("Ожидание порта %s:%s...", config.host, config.port)
         _wait_for_port(config.host, config.port, timeout=timeout)
         logger.info("Ожидание готовности СУБД '%s' (%s)...", source_name, config.type)

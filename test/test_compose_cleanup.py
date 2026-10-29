@@ -48,15 +48,18 @@ class ComposeCleanupTests(unittest.TestCase):
                        "-v", f"{foreign}:/data", image, "sleep", "300")
                 docker(*compose, "up", "-d")
                 code = '''
+import os
 from functools import partial
 from unittest.mock import patch
 from app.container_manager import _get_docker_client, _run_container
 from app.models import SourceConfig
+# Образ движка читается runtime-провайдером из env в момент сборки ContainerSpec
+os.environ["SYDAFA_MSSQL_IMAGE"] = "sydafa:latest"
+os.environ["SYDAFA_ORACLE_IMAGE"] = "sydafa:latest"
 client = _get_docker_client()
 client.containers.run = partial(client.containers.run, command=["sleep", "300"])
-with patch("app.container_manager.SOURCE_IMAGES", {"mssql": "sydafa:latest", "oracle": "sydafa:latest"}):
-    for kind, port in (("mssql", 1433), ("oracle", 1521)):
-        _run_container(client, kind, SourceConfig(name=kind, type=kind, host=kind, port=port))
+for kind, port in (("mssql", 1433), ("oracle", 1521)):
+    _run_container(client, kind, SourceConfig(name=kind, type=kind, host=kind, port=port))
 '''
                 docker(*compose, "exec", "-T", "sydafa", "python", "-c", code)
                 reset = '''

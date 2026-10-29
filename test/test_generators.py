@@ -5,14 +5,16 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.generators import (
-    GenerationSession,
+from app.backends.rdbms.generation import GenerationSession, append_rows, mint_new_row
+from app.backends.rdbms.mssql.dialect import MssqlDialect
+from app.generation.values import (
     GeneratorError,
-    _generate_value,
-    _mint_new_row,
-    _resolve_anchor_date,
-    _shift_date,
+    generate_value,
+    resolve_anchor_date,
+    shift_date,
 )
+
+MSSQL = MssqlDialect()
 from app.models import (
     ChoiceGenerator,
     ColumnSpec,
@@ -60,7 +62,7 @@ class TestGenerators(unittest.TestCase):
         """random_date без параметров всегда возвращает дату строго в рамках текущего года."""
         current_year = date.today().year
         for _ in range(50):
-            val = _generate_value("dt", gen=RandomDateGenerator(), col_type="date")
+            val = generate_value("dt", gen=RandomDateGenerator(), col_type="date")
             self.assertIsInstance(val, date)
             self.assertEqual(val.year, current_year)
             self.assertGreaterEqual(val, date(current_year, 1, 1))
@@ -72,18 +74,18 @@ class TestGenerators(unittest.TestCase):
 
         # Anchor today + dim d [-5, 5]
         gen_d = RandomDateGenerator(anchor="today", dim="d", min_offset=-5, max_offset=5)
-        val_d = _generate_value("dt_d", gen=gen_d, col_type="date")
+        val_d = generate_value("dt_d", gen=gen_d, col_type="date")
         self.assertIsInstance(val_d, date)
         self.assertLessEqual(abs((val_d - today).days), 5)
 
         # Anchor start_of_month
         gen_m = RandomDateGenerator(anchor="start_of_month", dim="d", min_offset=0, max_offset=0)
-        val_m = _generate_value("dt_m", gen=gen_m, col_type="date")
+        val_m = generate_value("dt_m", gen=gen_m, col_type="date")
         self.assertEqual(val_m, date(today.year, today.month, 1))
 
         # Anchor start_of_quarter
         gen_q = RandomDateGenerator(anchor="start_of_quarter", dim="d", min_offset=0, max_offset=0)
-        val_q = _generate_value("dt_q", gen=gen_q, col_type="date")
+        val_q = generate_value("dt_q", gen=gen_q, col_type="date")
         expected_q_month = ((today.month - 1) // 3) * 3 + 1
         self.assertEqual(val_q, date(today.year, expected_q_month, 1))
 
@@ -91,33 +93,33 @@ class TestGenerators(unittest.TestCase):
         """Проверка безопасного смещения дат: високосные года и концы месяцев."""
         # 29 февраля 2024 (високосный) + 1 год -> 28 февраля 2025 (невисокосный)
         base_leap = date(2024, 2, 29)
-        shifted_y = _shift_date(base_leap, "y", 1)
+        shifted_y = shift_date(base_leap, "y", 1)
         self.assertEqual(shifted_y, date(2025, 2, 28))
 
         # 29 февраля 2024 + 4 года -> 29 февраля 2028 (високосный)
-        shifted_4y = _shift_date(base_leap, "y", 4)
+        shifted_4y = shift_date(base_leap, "y", 4)
         self.assertEqual(shifted_4y, date(2028, 2, 29))
 
         # 31 января 2026 + 1 месяц -> 28 февраля 2026
         base_jan31 = date(2026, 1, 31)
-        shifted_m = _shift_date(base_jan31, "m", 1)
+        shifted_m = shift_date(base_jan31, "m", 1)
         self.assertEqual(shifted_m, date(2026, 2, 28))
 
         # 31 августа 2026 - 1 месяц -> 31 июля 2026
         base_aug31 = date(2026, 8, 31)
-        shifted_prev_m = _shift_date(base_aug31, "m", -1)
+        shifted_prev_m = shift_date(base_aug31, "m", -1)
         self.assertEqual(shifted_prev_m, date(2026, 7, 31))
 
         # Неизвестная размерность
         with self.assertRaises(GeneratorError):
-            _shift_date(date(2026, 1, 1), "unknown", 1)
+            shift_date(date(2026, 1, 1), "unknown", 1)
 
     def test_date_offset_generator(self):
         """date_offset вычисляет дату со сдвигом от ref_column."""
         gen = DateOffsetGenerator(ref_column="start_date", dim="y", min_offset=1, max_offset=3)
         row_context = {"start_date": date(2026, 5, 10)}
         for _ in range(20):
-            val = _generate_value("end_date", row_values=row_context, gen=gen, col_type="date")
+            val = generate_value("end_date", row_values=row_context, gen=gen, col_type="date")
             self.assertIsInstance(val, date)
             self.assertEqual(val.month, 5)
             self.assertEqual(val.day, 10)
@@ -125,20 +127,20 @@ class TestGenerators(unittest.TestCase):
             self.assertGreater(val, row_context["start_date"])
 
         # Базовая дата None -> возвращает None
-        self.assertIsNone(_generate_value("end_date", row_values={"start_date": None}, gen=gen, col_type="date"))
+        self.assertIsNone(generate_value("end_date", row_values={"start_date": None}, gen=gen, col_type="date"))
 
     def test_null_ratio(self):
         """null_ratio=1.0 всегда дает None, null_ratio=0.0 никогда не дает None."""
         gen_null = FakerGenerator(provider="word", null_ratio=1.0)
-        self.assertIsNone(_generate_value("txt", gen=gen_null, col_type="string"))
+        self.assertIsNone(generate_value("txt", gen=gen_null, col_type="string"))
 
         gen_not_null = FakerGenerator(provider="word", null_ratio=0.0)
-        self.assertIsNotNone(_generate_value("txt", gen=gen_not_null, col_type="string"))
+        self.assertIsNotNone(generate_value("txt", gen=gen_not_null, col_type="string"))
 
     def test_faker_locale(self):
         """Faker с локалью ru_RU генерирует данные с кириллицей."""
         gen = FakerGenerator(provider="name", locale="ru_RU")
-        val = _generate_value("name", gen=gen, col_type="string")
+        val = generate_value("name", gen=gen, col_type="string")
         self.assertIsInstance(val, str)
         self.assertTrue(len(val) > 0)
 
@@ -146,13 +148,13 @@ class TestGenerators(unittest.TestCase):
         """pattern подставляет символы по плейсхолдерам и сохраняет литералы шаблона."""
         gen = PatternGenerator(template="40817810############")
         for _ in range(25):
-            val = _generate_value("account_number", gen=gen, col_type="string")
+            val = generate_value("account_number", gen=gen, col_type="string")
             self.assertRegex(val, r"^40817810\d{12}$")
 
     def test_pattern_generator_placeholder_classes(self):
         """'#' — цифры, '@' — заглавные, 'a' — строчные, '?' — буквоцифры."""
         gen = PatternGenerator(template="AAA-####-@@@-aaa-???-ZZZ")
-        val = _generate_value("code", gen=gen, col_type="string")
+        val = generate_value("code", gen=gen, col_type="string")
         digits, upper_rand, lower_rand, alnum = val.split("-")[1:5]
         self.assertTrue(digits.isdigit() and len(digits) == 4)
         self.assertTrue(upper_rand.isalpha() and upper_rand.isupper() and len(upper_rand) == 3)
@@ -168,7 +170,7 @@ class TestGenerators(unittest.TestCase):
     def test_pattern_generator_null_ratio(self):
         """null_ratio=1.0 для pattern дает None."""
         gen = PatternGenerator(template="##", null_ratio=1.0)
-        self.assertIsNone(_generate_value("code", gen=gen, col_type="string"))
+        self.assertIsNone(generate_value("code", gen=gen, col_type="string"))
 
     def test_choice_with_weights(self):
         """ChoiceGenerator валидирует веса и соблюдает распределение."""
@@ -187,7 +189,7 @@ class TestGenerators(unittest.TestCase):
         # Вес 100% на один элемент
         gen = ChoiceGenerator(values=["FIRST", "SECOND"], weights=[1.0, 0.0])
         for _ in range(20):
-            self.assertEqual(_generate_value("status", gen=gen, col_type="string"), "FIRST")
+            self.assertEqual(generate_value("status", gen=gen, col_type="string"), "FIRST")
 
     def test_dag_generation_with_inverted_column_order(self):
         """Колонка end_date объявлена ПЕРЕД start_date в схеме таблицы.
@@ -215,9 +217,9 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
-        _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
+        mint_new_row(conn, "test_source", MSSQL, live, table, batch_id=1, session=session)
 
         self.assertEqual(len(conn.cur.executed), 1)
         insert_sql, params = conn.cur.executed[0]
@@ -258,10 +260,10 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
+            mint_new_row(conn, "test_source", MSSQL, live, table, batch_id=1, session=session)
         self.assertIn("циклическая", str(ctx.exception).lower())
 
     def test_dag_unknown_ref_column(self):
@@ -285,10 +287,10 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.contracts": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
         with self.assertRaises(GeneratorError) as ctx:
-            _mint_new_row(conn, "test_source", "mssql", live, table, batch_id=1, session=session)
+            mint_new_row(conn, "test_source", MSSQL, live, table, batch_id=1, session=session)
         self.assertIn("неизвестную ref_column", str(ctx.exception))
 
     def test_cumulative_balance_invariant(self):
@@ -323,11 +325,11 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.txs": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
         running_balances = {1: 0.0, 2: 0.0}
         for _ in range(50):
-            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
+            mint_new_row(conn, "test_src", MSSQL, live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
@@ -368,11 +370,11 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.vault": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
         global_balance = 0.0
         for _ in range(30):
-            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
+            mint_new_row(conn, "test_src", MSSQL, live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
@@ -417,14 +419,14 @@ class TestGenerators(unittest.TestCase):
 
         live = LiveSchema(schemas=["dbo"], tables={"dbo.txs": table})
         conn = FakeConn()
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
 
         # Имитируем, что в результате предыдущих update/delete баланс счета 999 ушел в глубокий минус (-1000.00)
         session.balances[0] = {(999,): -1000.0}
 
         # Все первые транзакции ОБЯЗАНЫ быть пополнениями (> 0), пока баланс не выйдет из дефицита!
         for _ in range(3):
-            _mint_new_row(conn, "test_src", "mssql", live, table, batch_id=1, session=session)
+            mint_new_row(conn, "test_src", MSSQL, live, table, batch_id=1, session=session)
             last_ins, params = conn.cur.executed[-1]
             cols = [c.strip().strip("[]\"") for c in last_ins.split("(")[1].split(")")[0].split(",")]
             row_dict = dict(zip(cols, params))
@@ -434,7 +436,6 @@ class TestGenerators(unittest.TestCase):
 
     def test_monotonic_sequence_no_sql_read_and_no_resurrection(self):
         """Проверка строгой монотонности сиквенса без SQL SELECT MAX и отсутствия переиспользования ID."""
-        from app.generators import append_rows_conn
         from app import schema_state
 
         source = "test_seq_src"
@@ -454,7 +455,7 @@ class TestGenerators(unittest.TestCase):
         conn = FakeConn()
 
         # Первый батч: 3 строки
-        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=3, batch_id=1)
+        append_rows(conn, source, MSSQL, live, "dbo", "orders", rows=3, batch_id=1)
 
         # Проверяем, что не было ни одного SELECT MAX
         for sql, _ in conn.cur.executed:
@@ -473,7 +474,7 @@ class TestGenerators(unittest.TestCase):
 
         # Второй батч: 2 строки (имитируем, что строки 2 и 3 могли быть удалены в БД)
         conn.cur.executed.clear()
-        append_rows_conn(conn, source, "mssql", live, "dbo", "orders", rows=2, batch_id=2)
+        append_rows(conn, source, MSSQL, live, "dbo", "orders", rows=2, batch_id=2)
 
         # Новые строки обязаны получить 4 и 5 (никакого возврата к 2 или 3)
         ids_batch2 = []
@@ -488,7 +489,6 @@ class TestGenerators(unittest.TestCase):
 
     def test_sequence_generator_on_non_pk_column(self):
         """Генератор kind=sequence корректно работает на не-PK колонках."""
-        from app.generators import append_rows_conn
         from app import schema_state, rules_state
 
         source = "test_seq_non_pk"
@@ -512,7 +512,7 @@ class TestGenerators(unittest.TestCase):
         live = LiveSchema(schemas=["dbo"], tables={"dbo.docs": table})
         conn = FakeConn()
 
-        append_rows_conn(conn, source, "mssql", live, "dbo", "docs", rows=3, batch_id=1)
+        append_rows(conn, source, MSSQL, live, "dbo", "docs", rows=3, batch_id=1)
 
         reg_numbers = []
         doc_ids = []
@@ -531,20 +531,19 @@ class TestGenerators(unittest.TestCase):
     def test_uuid_generator(self):
         """Генератор uuid возвращает валидную строку UUIDv4."""
         import uuid as uuid_lib
-        val = _generate_value("id_col", gen=UuidGenerator(), col_type="string")
+        val = generate_value("id_col", gen=UuidGenerator(), col_type="string")
         self.assertIsInstance(val, str)
         parsed = uuid_lib.UUID(val)
         self.assertEqual(parsed.version, 4)
 
         # Автоматическая генерация для колонки типа uuid без явного генератора
-        val_auto = _generate_value("uuid_col", gen=None, col_type="uuid")
+        val_auto = generate_value("uuid_col", gen=None, col_type="uuid")
         self.assertIsInstance(val_auto, str)
         parsed_auto = uuid_lib.UUID(val_auto)
         self.assertEqual(parsed_auto.version, 4)
 
     def test_fk_empty_parent_raises_generator_error(self):
         """Попытка append в дочернюю таблицу при пустом родителе падает с GeneratorError."""
-        from app.generators import append_rows_conn
         from app import schema_state
 
         source = "test_fk_empty"
@@ -577,7 +576,7 @@ class TestGenerators(unittest.TestCase):
         conn = FakeConn()  # fetchall() возвращает [], т.е. родитель пуст
 
         with self.assertRaises(GeneratorError) as ctx:
-            append_rows_conn(conn, source, "mssql", live, "dbo", "order_items", rows=1, batch_id=1)
+            append_rows(conn, source, MSSQL, live, "dbo", "order_items", rows=1, batch_id=1)
 
         self.assertIn("пуста", str(ctx.exception))
         self.assertIn("orders", str(ctx.exception))
@@ -585,7 +584,6 @@ class TestGenerators(unittest.TestCase):
 
     def test_composite_pk_fk_plus_sequence(self):
         """Составной PK [order_id (FK), item_seq (sequence)] корректно наполняется."""
-        from app.generators import append_rows_conn
         from app import schema_state
 
         source = "test_composite_pk"
@@ -626,7 +624,7 @@ class TestGenerators(unittest.TestCase):
                 return cur
 
         conn = PopulatedParentConn()
-        append_rows_conn(conn, source, "mssql", live, "dbo", "order_items", rows=2, batch_id=1)
+        append_rows(conn, source, MSSQL, live, "dbo", "order_items", rows=2, batch_id=1)
 
         inserts = [e for e in conn.cur.executed if "INSERT INTO" in e[0]]
         self.assertEqual(len(inserts), 2)

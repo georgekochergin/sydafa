@@ -1,4 +1,9 @@
-"""Реестр источников данных СУБД (из init.json или динамически через Orchestration API)."""
+"""Реестр источников данных СУБД (из sources.json или динамически через Orchestration API).
+
+Хранит экземпляры источников; реализации движков и признак «тип поддерживается»
+определяются реестром `app/backends/registry.py` — таблица портов больше не
+является конкурирующим реестром типов.
+"""
 from __future__ import annotations
 
 import json
@@ -6,14 +11,20 @@ import logging
 import os
 from pathlib import Path
 
-from .constants import DEFAULT_INTERNAL_PORTS, READER_USER
+from .backends import registry
+from .constants import READER_USER
 from .models import SourceConfig
 
 logger = logging.getLogger("sydafa.sources")
 _sources: dict[str, SourceConfig] = {}
 
 
-def _find_sources_file() -> Path | None:
+def find_sources_file() -> Path | None:
+    """Единая точка поиска манифеста источников (sources.json с legacy init.json fallback).
+
+    Используется и реестром экземпляров, и инициализацией (`init_apply`);
+    порядок кандидатов менять нельзя — от него зависит совместимость окружений.
+    """
     env_path = os.environ.get("SYDAFA_SOURCES_FILE") or os.environ.get("SYDAFA_INIT_FILE")
     if env_path and Path(env_path).is_file():
         return Path(env_path)
@@ -39,7 +50,7 @@ def _find_sources_file() -> Path | None:
 
 
 def _load_sources_from_manifest() -> dict[str, SourceConfig]:
-    sources_path = _find_sources_file()
+    sources_path = find_sources_file()
     if not sources_path:
         return {}
     try:
@@ -64,7 +75,9 @@ def _load_sources_from_manifest() -> dict[str, SourceConfig]:
             src_type = instance_name.lower()
             raw_ext_port = None
 
-        if src_type not in DEFAULT_INTERNAL_PORTS:
+        # Поддерживаемость типа проверяет реестр реализаций (а не таблица портов);
+        # сама политика загрузки манифеста — прежняя warning+skip.
+        if not registry.has_engine(src_type):
             logger.warning("Пропущен источник '%s': неизвестный тип СУБД '%s'", instance_name, src_type)
             continue
 
@@ -86,7 +99,7 @@ def _load_sources_from_manifest() -> dict[str, SourceConfig]:
             else:
                 used_ext_ports[ext_port] = instance_name
 
-        int_port = DEFAULT_INTERNAL_PORTS[src_type]
+        int_port = registry.require(src_type).internal_port
         host = f"sydafa-src-{src_type}-{instance_name}"
 
         loaded[instance_name] = SourceConfig(
@@ -109,10 +122,9 @@ def load_sources() -> dict[str, SourceConfig]:
 def register_source(name: str, src_type: str, external_port: int | None = None) -> SourceConfig:
     global _sources
     src_type = src_type.lower()
-    if src_type not in DEFAULT_INTERNAL_PORTS:
-        raise ValueError(f"Неподдерживаемый тип СУБД '{src_type}'")
+    backend = registry.require(src_type)
 
-    int_port = DEFAULT_INTERNAL_PORTS[src_type]
+    int_port = backend.internal_port
     host = f"sydafa-src-{src_type}-{name}"
 
     cfg = SourceConfig(

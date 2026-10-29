@@ -10,8 +10,10 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from .backends.rdbms.initialization import compile_schema_decl_to_operations
 from .constants import DEFAULT_TTL_MINUTES, STATE_DIR
 from .models import ExecOperation, ExecRequest
+from .sources import find_sources_file, get_source
 
 logger = logging.getLogger("sydafa.init_apply")
 
@@ -21,31 +23,6 @@ _INIT_STATE_FILE = "init_state.json"
 def _state_file() -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return STATE_DIR / _INIT_STATE_FILE
-
-
-def find_sources_file() -> Path | None:
-    env_path = os.environ.get("SYDAFA_SOURCES_FILE") or os.environ.get("SYDAFA_INIT_FILE")
-    if env_path and Path(env_path).is_file():
-        return Path(env_path)
-    candidates = [
-        Path("/app/config/sources.json"),
-        Path("config/sources.json"),
-        Path("sources.json"),
-        Path("conf/sydafa/sources.json"),
-        Path("test/sydafa/sources.json"),
-        Path(__file__).parent.parent / "config" / "sources.json",
-        # Fallback candidates for transition
-        Path("/app/config/init.json"),
-        Path("config/init.json"),
-        Path("sydafa/init.json"),
-        Path("conf/sydafa/init.json"),
-        Path("test/sydafa/init.json"),
-        Path(__file__).parent.parent / "config" / "init.json",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    return None
 
 
 def _load_state_data() -> dict[str, Any]:
@@ -228,112 +205,19 @@ def check_and_heal_orphaned_state() -> None:
         )
 
 
-def compile_schema_decl_to_operations(
-    schema_data: dict[str, Any], rules_data: dict[str, Any] | None = None
-) -> list[ExecOperation]:
-    """Транслирует декларативное описание schema из sources.json в упорядоченный батч DDL операций."""
-    tables_dict = schema_data.get("tables", {})
-    if not isinstance(tables_dict, dict) or not tables_dict:
-        return []
-
-    from .models import ColumnSpec, CreateSchemaOp, CreateTableOp, ForeignKey, validate_entity_fqn
-
-    schemas: list[str] = []
-    parsed_tables: list[tuple[str, str, dict[str, Any]]] = []
-    for fqn, t_spec in tables_dict.items():
-        schema_name, table_name = validate_entity_fqn(fqn)
-        if schema_name not in schemas:
-            schemas.append(schema_name)
-        parsed_tables.append((schema_name, table_name, t_spec if isinstance(t_spec, dict) else {}))
-
-    operations: list[ExecOperation] = [CreateSchemaOp(name=s) for s in schemas]
-
-    # Топологическая сортировка таблиц по Foreign Keys (родительские таблицы перед дочерними)
-    deps: dict[str, set[str]] = {}
-    table_map: dict[str, tuple[str, str, dict[str, Any]]] = {}
-    for s_name, t_name, t_spec in parsed_tables:
-        fqn = f"{s_name}.{t_name}"
-        table_map[fqn] = (s_name, t_name, t_spec)
-        fks_raw = t_spec.get("foreign_keys", [])
-        t_deps: set[str] = set()
-        for fk in fks_raw:
-            ref_fqn = fk.get("ref_entity_fqn") if isinstance(fk, dict) else getattr(fk, "ref_entity_fqn", None)
-            if ref_fqn and ref_fqn != fqn and ref_fqn in tables_dict:
-                t_deps.add(ref_fqn)
-        deps[fqn] = t_deps
-
-    remaining = set(table_map.keys())
-    sorted_fqns: list[str] = []
-    while remaining:
-        ready = [fqn for fqn in remaining if deps[fqn].issubset(set(sorted_fqns))]
-        if not ready:
-            sorted_fqns.extend(sorted(remaining))
-            break
-        for fqn in ready:
-            sorted_fqns.append(fqn)
-            remaining.remove(fqn)
-
-    for fqn in sorted_fqns:
-        s_name, t_name, t_spec = table_map[fqn]
-        pk = t_spec.get("primary_key", [])
-        raw_cols = t_spec.get("columns", {})
-        t_rules = (
-            rules_data.get(fqn, {}).get("columns", {})
-            if isinstance(rules_data, dict) and isinstance(rules_data.get(fqn), dict)
-            else {}
-        )
-        col_specs: list[ColumnSpec] = []
-        if isinstance(raw_cols, dict):
-            for col_name, col_info in raw_cols.items():
-                if isinstance(col_info, dict):
-                    col_type = col_info.get("type")
-                    gen = col_info.get("generator") or t_rules.get(col_name)
-                elif hasattr(col_info, "type"):
-                    col_type = getattr(col_info, "type", None)
-                    gen = getattr(col_info, "generator", None) or t_rules.get(col_name)
-                else:
-                    col_type = None
-                    gen = t_rules.get(col_name)
-                col_specs.append(ColumnSpec(name=col_name, type=col_type, generator=gen))
-        elif isinstance(raw_cols, list):
-            for c in raw_cols:
-                if isinstance(c, dict):
-                    c_name = c["name"]
-                    c_type = c["type"]
-                    gen = c.get("generator") or t_rules.get(c_name)
-                    col_specs.append(ColumnSpec(name=c_name, type=c_type, generator=gen))
-                elif hasattr(c, "name") and hasattr(c, "type"):
-                    gen = getattr(c, "generator", None) or t_rules.get(c.name)
-                    col_specs.append(ColumnSpec(name=c.name, type=c.type, generator=gen))
-
-        fks_list: list[ForeignKey] = []
-        for fk in t_spec.get("foreign_keys", []):
-            if isinstance(fk, dict):
-                fks_list.append(ForeignKey(**fk))
-            elif isinstance(fk, ForeignKey):
-                fks_list.append(fk)
-
-        operations.append(
-            CreateTableOp(
-                entity_fqn=f"{s_name}.{t_name}",
-                primary_key=pk,
-                columns=col_specs,
-                foreign_keys=fks_list,
-            )
-        )
-
-    return operations
-
-
 def apply_init_for_source(source: str) -> None:
     """Применяет DDL схемы и правила из sources.json для указанного источника.
     
     Если источник уже был инициализирован ранее, повторный накат пропускается.
     Создаются чистые таблицы и регистрируются правила генерации.
+    Накат схемы — операция RDBMS-семейства: семейство проверяется до исполнения.
     """
     if is_source_initialized(source):
         logger.info("Источник '%s' уже инициализирован ранее. Повторная инициализация операций игнорируется.", source)
         return
+
+    from .backends import registry
+    backend = registry.require_rdbms(get_source(source).type)
 
     init_sources = load_manifest_sources()
     if source not in init_sources:
@@ -345,7 +229,7 @@ def apply_init_for_source(source: str) -> None:
     if not isinstance(val, dict):
         val = {}
 
-    from . import exec_engine
+    from .backends.rdbms import execution as rdbms_execution
 
     # 1. Загрузка правил генерации rules (если заданы)
     rules_raw = val.get("rules", {})
@@ -365,7 +249,7 @@ def apply_init_for_source(source: str) -> None:
     if isinstance(schema_raw, dict) and schema_raw.get("tables"):
         ddl_ops = compile_schema_decl_to_operations(schema_raw, rules_data=rules_raw)
         logger.info("Манифест sources.json: выполнение %d DDL операций декларативной схемы для '%s'...", len(ddl_ops), source)
-        exec_engine.execute_source_operations(source, ddl_ops)
+        rdbms_execution.execute_source_operations(source, ddl_ops, backend=backend)
 
     # 3. Поддержка legacy operations (только DDL, исключая автозаливку append)
     elif "operations" in val:
@@ -377,7 +261,7 @@ def apply_init_for_source(source: str) -> None:
             filtered_ops = [op for op in parsed_ops if getattr(op, "op", "") != "append"]
             if filtered_ops:
                 logger.info("Манифест sources.json: выполнение %d legacy DDL операций для '%s'...", len(filtered_ops), source)
-                exec_engine.execute_source_operations(source, filtered_ops)
+                rdbms_execution.execute_source_operations(source, filtered_ops, backend=backend)
             else:
                 logger.info("Манифест sources.json: для источника '%s' нет DDL операций.", source)
 

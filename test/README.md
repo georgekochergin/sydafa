@@ -41,8 +41,13 @@
 - **`test_init_apply.py`** — проверка применения манифеста `init.json`, фиксации состояния в `/state/init_state.json` и логики Self-Healing (удаление осиротевших контейнеров и томов при пустом `/state`).
 - **`test_secrets.py`** — генерация и сохранение надежных случайных паролей DBA в `/state/secrets.json`.
 - **`test_container_names.py`** — валидация стандартизированных сетевых имен контейнеров и томов (с префиксами и без).
-- **`test_schema_engine.py`** и **`test_evolve_models.py`** — валидация моделей DDL/DML, парсинг типов данных и ограничений целостности.
-- **`test_exec_engine.py`** — построение SQL-выражений и валидация предикатов.
+- **`test_schema_engine.py`** и **`test_evolve_models.py`** — валидация DDL-компилятора общего RDBMS-слоя (`app/backends/rdbms/ddl.py`), парсинг моделей DDL/DML и ограничений целостности.
+- **`test_exec_engine.py`** — построение диалектного SQL мутаций (общие + vendor-модули `backends/rdbms/{mutations,mssql/oracle/mutations}`) и валидация предикатов.
+- **`test_ddl_characterization.py`** — characterization SQL диалектов MSSQL/Oracle (типы, квотирование, констрейнты) — спецификация переноса без изменения вывода.
+- **`test_behavior_freeze.py`** — инвентарь сохраняемого поведения: тексты ошибок FK/cascade (HTTP 409), fallback-и, резервирование batch_id, wire-ответ SourceInfo.
+- **`test_registry.py`** — реестр движков: соответствие enum моделей, отказ неизвестного типа, границы импортов backend-слоя.
+- **`test_fake_backend.py`** — доказательство расширяемости: fake RDBMS-движок проходит schema+DML через общий execution без правок общих алгоритмов; не-RDBMS семейство отклоняется до подключения.
+- **`test_architecture_guards.py`** — запрет вендорных ветвлений в общих модулях, Docker/драйверы вне своего слоя, Airflow без внутренних импортов.
 
 ---
 
