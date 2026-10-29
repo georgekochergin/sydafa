@@ -219,7 +219,9 @@ def truncate_table(
     cascade: bool = False, batch_id: int = 1,
 ) -> int:
     """Предметная очистка таблицы: архивация всех строк, каскад зависимых,
-    физический TRUNCATE только без dependents (иначе DELETE — их нельзя TRUNCATE первыми)."""
+    физическую команду выбирает диалект (hard=True — TRUNCATE-семантика; при
+    наличии зависимостей очистка идёт построчным DELETE). Рекурсивные шаги
+    каскада проходят через эту же функцию — то есть тоже через диалект."""
     table = find_table(live, schema, table_name)
     qualified = dialect.qualify_table(table.schema_, table.name)
     current_fqn = f"{table.schema_}.{table.name}"
@@ -257,8 +259,5 @@ def truncate_table(
             for dep in dependents:
                 truncate_table(conn, dialect, live, dep.schema_, dep.name, cascade=True, batch_id=batch_id)
 
-    if dependents:
-        cur.execute(f"DELETE FROM {qualified}")
-    else:
-        cur.execute(f"TRUNCATE TABLE {qualified}")
+    cur.execute(dialect.clear_table(table.schema_, table.name, hard=not dependents))
     return 1

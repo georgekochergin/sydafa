@@ -1,21 +1,38 @@
-"""Контракты RDBMS-семейства: диалект SQL и границы транзакций.
+"""Контракты RDBMS-семейства: диалект SQL, физическая очистка и границы транзакций.
 
 Диалект — не только CREATE TABLE: квотирование, маппинг типов, стиль
-бинд-параметров и все DDL-действия над схемой/таблицами/колонками.
-Валидация операций относительно LiveSchema и обновление модели —
-обязанность общего слоя (`rdbms/ddl.py`), а не диалекта.
+бинд-параметров, все DDL-действия над схемой/таблицами/колонками и физическая
+команда очистки. Валидация операций относительно LiveSchema и обновление
+модели — обязанность общего слоя (`rdbms/ddl.py`), а не диалекта.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from ...models import ColumnSpec, TableSchema
+
+
+@dataclass(frozen=True)
+class TransactionSemantics:
+    """Честные границы транзакционности движка по классам операций.
+
+    Описывает фактическую семантику, не обещая All-or-Nothing там, где её нет
+    (SIDE-01/backlog №4: безусловная гарантия отката всего батча Oracle DDL/TRUNCATE
+    не обеспечивается; исправление контракта — отдельная задача).
+    """
+
+    transactional_dml: bool          # INSERT/UPDATE/DELETE откатываются rollback
+    transactional_ddl: bool          # DDL-операции откатываются rollback
+    implicit_commit_ddl: bool        # DDL выполняет неявный commit (Oracle)
+    transactional_hard_clear: bool   # физический TRUNCATE откатывается rollback
 
 
 class RdbmsDialect(Protocol):
     """SQL-диалект конкретного движка; общие алгоритмы не содержат ветвлений по типу."""
 
     engine_type: str
+    transaction_semantics: TransactionSemantics
 
     # --- Идентификаторы и типы ---
     def quote_identifier(self, ident: str) -> str:
@@ -45,6 +62,11 @@ class RdbmsDialect(Protocol):
 
     def drop_table(self, schema: str, table: str) -> str:
         """DROP TABLE с учётом зависимостей (Oracle — CASCADE CONSTRAINTS)."""
+
+    def clear_table(self, schema: str, table: str, *, hard: bool) -> str:
+        """Физическая команда очистки таблицы: hard=True — TRUNCATE-семантика,
+        hard=False — построчное удаление (используется при наличии зависимостей).
+        Предметная семантика очистки (audit/cascade/порядок) — общий слой."""
 
     def rename_table(self, schema: str, from_name: str, to_name: str) -> str: ...
 

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import unittest
 import typing
+from pathlib import Path
 
 from app.backends import registry
 from app.backends.contracts import FAMILY_RDBMS
@@ -71,6 +72,7 @@ class TestBackendRegistry(unittest.TestCase):
 class TestRegistryImportBoundary(unittest.TestCase):
     def test_import_backends_has_no_side_effect_dependencies(self):
         """Импорт реестра не тянет Docker SDK, драйверы СУБД и FastAPI."""
+        repo_root = str(Path(__file__).resolve().parents[1])
         code = (
             "import sys; import app.backends;"
             "leaked = {'docker', 'pymssql', 'oracledb', 'fastapi', 'uvicorn'} & set(sys.modules);"
@@ -78,7 +80,7 @@ class TestRegistryImportBoundary(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
-            capture_output=True, text=True, cwd="/app",
+            capture_output=True, text=True, cwd=repo_root,
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
 

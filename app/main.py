@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
 from . import container_manager, rules_state, schema_state, sources
+from .backends import registry
 from .backends.rdbms.execution import ExecError, execute_source_operations
 from .backends.rdbms.generation import validate_table_invariants
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
@@ -96,6 +97,16 @@ def healthcheck(response: Response):
 def _assert_source(source: str) -> None:
     if source not in sources.source_names():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Неизвестный источник '{source}'")
+
+
+def _require_rdbms_source(source: str):
+    """Выбор RDBMS backend на границе HTTP-сценария — до wake и резервирования состояния.
+
+    Не-RDBMS источник (будущее семейство stream) отклоняется здесь, не успев
+    поднять контейнер; выбранный backend передаётся дальше явным контекстом.
+    """
+    cfg = sources.get_source(source)
+    return registry.require_rdbms(cfg.type)
 
 
 def _wake(source: str, ttl_minutes: int = DEFAULT_TTL_MINUTES, publish: bool = False, request_host: str | None = None) -> dict:
@@ -197,10 +208,15 @@ def reinit_source_endpoint(source: str):
 def migrate_source(source: str, req: MigrateRequest, request: Request):
     """Выполняет упорядоченный батч операций DDL и DML в единой All-or-Nothing транзакции."""
     _assert_source(source)
+    # Семейство/регистрация проверяются до wake: не-RDBMS источник не поднимает контейнер
+    try:
+        backend = _require_rdbms_source(source)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     request_host = request.url.hostname if request else None
     _wake(source, request_host=request_host)
     try:
-        return execute_source_operations(source, req.operations)
+        return execute_source_operations(source, req.operations, backend=backend)
     except ExecError as exc:
         code = status.HTTP_409_CONFLICT if exc.is_conflict else status.HTTP_422_UNPROCESSABLE_ENTITY
         raise HTTPException(code, str(exc)) from exc
@@ -283,6 +299,7 @@ def add_table_invariant(
         if validate_existing:
             if hasattr(invariant, "validate_existing"):
                 invariant.validate_existing = True
+            _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
             validate_table_invariants(source, entity_fqn, profile)
@@ -337,10 +354,12 @@ def set_table_rule_profile(
             for inv in profile.invariants:
                 if hasattr(inv, "validate_existing"):
                     inv.validate_existing = True
+            _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
             validate_table_invariants(source, entity_fqn, profile)
         elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
+            _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
             validate_table_invariants(source, entity_fqn, profile)

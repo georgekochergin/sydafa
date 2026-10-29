@@ -111,11 +111,14 @@ class GenerationSession:
 
         for idx, inv in enumerate(self.profile.invariants):
             if isinstance(inv, CumulativeBalanceInvariant):
+                # Инкрементальное наполнение с подавлением исключений (backlog №12):
+                # сбой чтения/преобразования поздней строки не затирает уже
+                # заполненную часть балансов — в точности как до переноса.
+                self.balances[idx] = {}
                 try:
-                    self.balances[idx] = load_existing_balances(self.conn, self.dialect, qualified, inv)
+                    load_existing_balances(self.conn, self.dialect, qualified, inv, self.balances[idx])
                 except Exception:
-                    # Сохраняемое поведение: сбой предзагрузки не прерывает генерацию (backlog №12)
-                    self.balances[idx] = {}
+                    pass
 
 
 def _resolve_fk_values(

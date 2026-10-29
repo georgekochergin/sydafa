@@ -25,10 +25,14 @@ def pick_existing_pk(conn, dialect, qualified: str, pk_cols: list[str]) -> dict[
 
 
 def load_existing_balances(
-    conn, dialect, qualified: str, inv: CumulativeBalanceInvariant
-) -> dict[tuple[Any, ...], float]:
-    """Текущие накопленные балансы инварианта cumulative_balance (partition или глобально)."""
-    balances: dict[tuple[Any, ...], float] = {}
+    conn, dialect, qualified: str, inv: CumulativeBalanceInvariant, balances: dict
+) -> None:
+    """Заполняет переданный словарь накопленных балансов построчно.
+
+    Инкрементальное наполнение — часть сохраняемого поведения: при ошибке
+    чтения/преобразования поздней строки уже заполненная часть остаётся
+    (подавление исключения — на вызывающем слое, backlog №12).
+    """
     amt_col = dialect.quote_identifier(inv.amount_column)
     cur = conn.cursor()
     if inv.partition_by:
@@ -40,13 +44,13 @@ def load_existing_balances(
             sum_val = float(r[-1]) if r[-1] is not None else 0.0
             balances[part_vals] = sum_val
     else:
-        cur.execute(f"SELECT SUM({amt_col}) FROM {qualified}")
+        sql = f"SELECT SUM({amt_col}) FROM {qualified}"
+        cur.execute(sql)
         rows = cur.fetchall()
         if rows and rows[0] and rows[0][0] is not None:
             balances[()] = float(rows[0][0])
         else:
             balances[()] = 0.0
-    return balances
 
 
 def fetch_invariant_violations(

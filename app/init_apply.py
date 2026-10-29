@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 from .backends.rdbms.initialization import compile_schema_decl_to_operations
 from .constants import DEFAULT_TTL_MINUTES, STATE_DIR
 from .models import ExecOperation, ExecRequest
-from .sources import find_sources_file
+from .sources import find_sources_file, get_source
 
 logger = logging.getLogger("sydafa.init_apply")
 
@@ -210,10 +210,14 @@ def apply_init_for_source(source: str) -> None:
     
     Если источник уже был инициализирован ранее, повторный накат пропускается.
     Создаются чистые таблицы и регистрируются правила генерации.
+    Накат схемы — операция RDBMS-семейства: семейство проверяется до исполнения.
     """
     if is_source_initialized(source):
         logger.info("Источник '%s' уже инициализирован ранее. Повторная инициализация операций игнорируется.", source)
         return
+
+    from .backends import registry
+    registry.require_rdbms(get_source(source).type)
 
     init_sources = load_manifest_sources()
     if source not in init_sources:

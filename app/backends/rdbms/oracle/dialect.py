@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from ....models import ColumnSpec, TableSchema
+from ..contracts import TransactionSemantics
 
 _TYPES = {
     "bigint": "NUMBER(19)",
@@ -19,9 +20,19 @@ _TYPES = {
 
 _DECIMAL_RE = re.compile(r"^decimal\((\d+),\s*(\d+)\)$")
 
+# Oracle: DML транзакционен; DDL и TRUNCATE выполняют неявный commit и не
+# откатываются последующим rollback (SIDE-01/backlog №4 — честная граница)
+TRANSACTION_SEMANTICS = TransactionSemantics(
+    transactional_dml=True,
+    transactional_ddl=False,
+    implicit_commit_ddl=True,
+    transactional_hard_clear=False,
+)
+
 
 class OracleDialect:
     engine_type = "oracle"
+    transaction_semantics = TRANSACTION_SEMANTICS
 
     # --- Идентификаторы и типы ---
 
@@ -95,6 +106,10 @@ class OracleDialect:
 
     def drop_table(self, schema: str, table: str) -> str:
         return f"DROP TABLE {self.qualify_table(schema, table)} CASCADE CONSTRAINTS"
+
+    def clear_table(self, schema: str, table: str, *, hard: bool) -> str:
+        qualified = self.qualify_table(schema, table)
+        return f"TRUNCATE TABLE {qualified}" if hard else f"DELETE FROM {qualified}"
 
     def rename_table(self, schema: str, from_name: str, to_name: str) -> str:
         return (

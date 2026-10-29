@@ -197,9 +197,10 @@ class OracleRuntime:
 
         Помимо чтения данных (SELECT ANY TABLE) читатель получает SELECT ANY
         DICTIONARY — только для мониторинга активных сессий (v$session).
-        Выдача выполняется из сессии SYSDBA: у dba_user есть SYSDBA
-        CONTAINER=ALL, а обычная сессия с ролью DBA не может выдать системную
-        привилегию словаря.
+        Выдача выполняется сессией внутреннего DBA в режиме SYSDBA
+        (dba_user имеет SYSDBA CONTAINER=ALL): обычная сессия с ролью DBA
+        не может выдать системную привилегию словаря, а отдельная SYS-учётка
+        здесь не используется — доступность DBA достаточна (behavior freeze).
         """
         import oracledb
 
@@ -207,7 +208,7 @@ class OracleRuntime:
         while time.time() < deadline:
             try:
                 dsn = oracledb.makedsn(host, port, service_name=SYDAFA_DB)
-                conn = _connect(dsn, "SYS", secrets.oracle_sys_password, mode=oracledb.AUTH_MODE_SYSDBA)
+                conn = _connect(dsn, secrets.dba_user, secrets.dba_password, mode=oracledb.AUTH_MODE_SYSDBA)
                 try:
                     cur = conn.cursor()
                     cur.execute(f"SELECT username FROM all_users WHERE UPPER(username) = UPPER('{reader_user}')")

@@ -171,18 +171,43 @@ class TestFallbacksCharacterization(unittest.TestCase):
         with self.assertRaises(GeneratorError):
             _find_table(live, "other", "missing")
 
-    def test_preload_state_swallows_read_errors(self):
-        """D-6: сбой чтения балансов подавляется — сессия создаётся с пустыми балансами."""
+    def _balances_session(self, conn, profile):
         table = TableSchema(
             name="txs", schema="demo", primary_key=["id"],
-            columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="amount", type="decimal(12,2)")],
+            columns=[
+                ColumnSpec(name="id", type="bigint"),
+                ColumnSpec(name="account_id", type="bigint"),
+                ColumnSpec(name="amount", type="decimal(12,2)"),
+            ],
         )
         live = LiveSchema(schemas=["demo"], tables={"demo.txs": table})
+        return GenerationSession(conn, MSSQL, live, table, profile)
+
+    def test_preload_state_swallows_read_errors(self):
+        """D-6/backlog №12: сбой чтения балансов подавляется — генерация продолжается."""
+        from app.models import CumulativeBalanceInvariant
+
         conn = FakeConn()
         conn.cur.execute = lambda sql, params=None: (_ for _ in ()).throw(RuntimeError("db read failed"))
-        profile = TableRuleProfile()  # инвариантов нет: preload не выполняет SQL
-        session = GenerationSession(conn, MSSQL, live, table, profile)
-        self.assertEqual(session.balances, {})
+        profile = TableRuleProfile(
+            invariants=[CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount")]
+        )
+        session = self._balances_session(conn, profile)
+        # Чтение упало на execute: инвариант зарегистрирован с пустыми балансами
+        self.assertEqual(session.balances, {0: {}})
+
+    def test_preload_state_keeps_partial_balances_on_late_row_error(self):
+        """D-6/backlog №12 (review R5): ошибка поздней строки не затирает уже прочитанные балансы."""
+        from app.models import CumulativeBalanceInvariant
+
+        conn = FakeConn()
+        # Вторая строка ломает преобразование float(): частичный результат (101,) должен остаться
+        conn.cur._rows = [(101, 100), (102, "invalid-number")]
+        profile = TableRuleProfile(
+            invariants=[CumulativeBalanceInvariant(partition_by=["account_id"], amount_column="amount")]
+        )
+        session = self._balances_session(conn, profile)
+        self.assertEqual(session.balances, {0: {(101,): 100.0}})
 
 
 class TestBatchReservationCharacterization(unittest.TestCase):

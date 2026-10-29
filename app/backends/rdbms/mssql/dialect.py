@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from ....models import ColumnSpec, TableSchema
+from ..contracts import TransactionSemantics
 
 _TYPES = {
     "bigint": "BIGINT",
@@ -19,9 +20,19 @@ _TYPES = {
 
 _DECIMAL_RE = re.compile(r"^decimal\((\d+),\s*(\d+)\)$")
 
+# MSSQL: DML транзакционен; DDL допускается внутри транзакции и откатывается;
+# TRUNCATE также откатывается (минимально протоколируется, но участвует в транзакции)
+TRANSACTION_SEMANTICS = TransactionSemantics(
+    transactional_dml=True,
+    transactional_ddl=True,
+    implicit_commit_ddl=False,
+    transactional_hard_clear=True,
+)
+
 
 class MssqlDialect:
     engine_type = "mssql"
+    transaction_semantics = TRANSACTION_SEMANTICS
 
     # --- Идентификаторы и типы ---
 
@@ -89,6 +100,10 @@ class MssqlDialect:
 
     def drop_table(self, schema: str, table: str) -> str:
         return f"DROP TABLE {self.qualify_table(schema, table)}"
+
+    def clear_table(self, schema: str, table: str, *, hard: bool) -> str:
+        qualified = self.qualify_table(schema, table)
+        return f"TRUNCATE TABLE {qualified}" if hard else f"DELETE FROM {qualified}"
 
     def rename_table(self, schema: str, from_name: str, to_name: str) -> str:
         return f"EXEC sp_rename '[{schema}].[{from_name}]', '{to_name}'"

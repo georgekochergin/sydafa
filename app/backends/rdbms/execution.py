@@ -55,14 +55,22 @@ def _open_working(cfg):
     return backend.connections.open_working(cfg, get_secrets(), container_name_for(cfg))
 
 
-def execute_source_operations(source_name: str, operations: list[ExecOperation]) -> ExecResult:
+def execute_source_operations(
+    source_name: str,
+    operations: list[ExecOperation],
+    backend=None,
+) -> ExecResult:
     """Выполняет батч операций DDL и DML в единой транзакции для указанного источника.
 
     Гарантия All-or-Nothing: при сбое любой операции транзакция в СУБД откатывается,
     а состояние LiveSchema в памяти восстанавливается.
+
+    `backend` — уже выбранный на границе сценария RDBMS backend (явный контекст);
+    если не передан, выбирается через реестр по типу источника.
     """
     cfg = get_source(source_name)
-    backend = registry.require_rdbms(cfg.type)
+    if backend is None:
+        backend = registry.require_rdbms(cfg.type)
     dialect = backend.dialect
     initial_live = get_live_schema(source_name)
     live: LiveSchema = copy.deepcopy(initial_live)
