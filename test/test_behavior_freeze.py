@@ -230,7 +230,7 @@ class TestBatchReservationCharacterization(unittest.TestCase):
 
         import app.backends.rdbms.execution as ee
         original_open = ee._open_working
-        ee._open_working = lambda cfg: fake_conn()
+        ee._open_working = lambda cfg, backend=None: fake_conn()
         self.addCleanup(setattr, ee, "_open_working", original_open)
 
         with patch("app.schema_state.STATE_DIR", state), \

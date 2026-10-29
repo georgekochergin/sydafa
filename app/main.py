@@ -299,10 +299,10 @@ def add_table_invariant(
         if validate_existing:
             if hasattr(invariant, "validate_existing"):
                 invariant.validate_existing = True
-            _require_rdbms_source(source)
+            backend = _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            validate_table_invariants(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile, backend=backend)
         rules_state.set_table_rules(source, entity_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
@@ -354,15 +354,15 @@ def set_table_rule_profile(
             for inv in profile.invariants:
                 if hasattr(inv, "validate_existing"):
                     inv.validate_existing = True
-            _require_rdbms_source(source)
+            backend = _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            validate_table_invariants(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile, backend=backend)
         elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
-            _require_rdbms_source(source)
+            backend = _require_rdbms_source(source)
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            validate_table_invariants(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile, backend=backend)
         rules_state.set_table_rules(source, entity_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err

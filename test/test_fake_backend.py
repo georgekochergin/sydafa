@@ -387,5 +387,84 @@ class TestNonRdbmsRejection(unittest.TestCase):
         mock_wake.assert_not_called()
 
 
+class TestSelectedBackendContext(unittest.TestCase):
+    """Regression review-2: выбранный на границе backend — единственный источник
+    dialect/connections/mutations; вложенные registry lookup запрещены."""
+
+    def setUp(self):
+        self.addCleanup(_register(FakeRdbmsBackend()))
+        FakeConnections.opened = 0
+        FakeConnections.last_conn = None
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = SourceConfig.model_construct(
+            name="fake_src", type="fakedb", host="sydafa-src-fakedb-fake_src",
+            port=9999, external_port=None, reader="sydafa",
+        )
+
+    def _forbid_registry_lookups(self):
+        from app.backends import registry as registry_module
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("вложенный registry lookup при переданном backend")
+
+        return patch.object(registry_module, "require_rdbms", _boom), \
+               patch.object(registry_module, "require", _boom)
+
+    def test_execution_uses_only_selected_backend(self):
+        """Сценарий schema+DML с backend=selected: ни одного обращения к реестру."""
+        from pydantic import TypeAdapter
+        from app.models import MigrateOperation
+
+        selected = registry.require_rdbms("fakedb")  # первичный выбор на границе сценария
+        ops = TypeAdapter(list[MigrateOperation]).validate_python([
+            CreateSchemaOp(name="demo"),
+            CreateTableOp(
+                entity_fqn="demo.parents",
+                primary_key=["parent_id"],
+                columns=[ColumnSpec(name="parent_id", type="bigint", generator={"kind": "sequence"})],
+            ),
+            {"op": "append", "entity_fqn": "demo.parents", "rows": 1},
+        ])
+        patch_require, patch_require_rdbms = self._forbid_registry_lookups()
+        with patch_require, patch_require_rdbms, \
+             patch("app.backends.rdbms.execution.get_source", return_value=self.cfg), \
+             patch("app.backends.rdbms.execution.get_live_schema", return_value=LiveSchema(schemas=[], tables={})), \
+             patch("app.backends.rdbms.execution.save_live_schema"), \
+             patch("app.backends.rdbms.execution.sync_sequences_after_operations"), \
+             patch("app.backends.rdbms.execution.append_evolution_log"):
+            result = execute_source_operations("fake_src", ops, backend=selected)
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(FakeConnections.opened, 1, "session открыта connections выбранного backend")
+        assert_all_fake_sql(FakeConnections.last_conn.cur.executed)
+
+    def test_invariant_validator_uses_passed_backend_and_conn(self):
+        """Валидатор с conn+backend: dialect выбранного объекта, ноль обращений к реестру."""
+        from app.models import CumulativeBalanceInvariant, TableRuleProfile, TableSchema
+
+        selected = registry.require_rdbms("fakedb")
+        children = TableSchema(
+            name="children", schema="demo", primary_key=["child_id"],
+            columns=[ColumnSpec(name="child_id", type="bigint")],
+        )
+        live = LiveSchema(schemas=["demo"], tables={"demo.children": children})
+        conn = FakeConn(rows=[])  # HAVING не возвращает нарушений
+        profile = TableRuleProfile(
+            invariants=[CumulativeBalanceInvariant(amount_column="amount", min_balance=0.0)]
+        )
+
+        from app.backends.rdbms.generation import validate_table_invariants
+
+        patch_require, patch_require_rdbms = self._forbid_registry_lookups()
+        with patch_require, patch_require_rdbms, \
+             patch("app.schema_state.get_live_schema", return_value=live):
+            validate_table_invariants("fake_src", "demo.children", profile, conn=conn, backend=selected)
+
+        sqls = [sql for sql, _ in conn.cur.executed]
+        self.assertIn("SELECT SUM(`amount`) FROM `demo`.`children` HAVING SUM(`amount`) < 0.0", sqls)
+        assert_all_fake_sql(conn.cur.executed)
+
+
 if __name__ == "__main__":
     unittest.main()

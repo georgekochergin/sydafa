@@ -217,7 +217,7 @@ def apply_init_for_source(source: str) -> None:
         return
 
     from .backends import registry
-    registry.require_rdbms(get_source(source).type)
+    backend = registry.require_rdbms(get_source(source).type)
 
     init_sources = load_manifest_sources()
     if source not in init_sources:
@@ -249,7 +249,7 @@ def apply_init_for_source(source: str) -> None:
     if isinstance(schema_raw, dict) and schema_raw.get("tables"):
         ddl_ops = compile_schema_decl_to_operations(schema_raw, rules_data=rules_raw)
         logger.info("Манифест sources.json: выполнение %d DDL операций декларативной схемы для '%s'...", len(ddl_ops), source)
-        rdbms_execution.execute_source_operations(source, ddl_ops)
+        rdbms_execution.execute_source_operations(source, ddl_ops, backend=backend)
 
     # 3. Поддержка legacy operations (только DDL, исключая автозаливку append)
     elif "operations" in val:
@@ -261,7 +261,7 @@ def apply_init_for_source(source: str) -> None:
             filtered_ops = [op for op in parsed_ops if getattr(op, "op", "") != "append"]
             if filtered_ops:
                 logger.info("Манифест sources.json: выполнение %d legacy DDL операций для '%s'...", len(filtered_ops), source)
-                rdbms_execution.execute_source_operations(source, filtered_ops)
+                rdbms_execution.execute_source_operations(source, filtered_ops, backend=backend)
             else:
                 logger.info("Манифест sources.json: для источника '%s' нет DDL операций.", source)
 

@@ -283,27 +283,32 @@ def validate_table_invariants(
     entity_fqn: str,
     profile: TableRuleProfile,
     conn=None,
+    backend=None,
 ) -> None:
     """Проверяет соответствие существующих данных правилам инвариантов profile.
 
     При обнаружении нарушений выбрасывает ValueError с прежним текстом.
     Сохраняемое поведение (backlog №7/№12): ошибка проверочного запроса
     трактуется как отсутствие нарушений; отсутствие таблицы в live-схеме —
-    тихий успех. Если conn не передан, открывается одна рабочая session
-    через выбранный по типу источника backend.
+    тихий успех. backend — выбранный на границе сценария контекст (dialect и
+    connections берутся из него без повторного lookup); если не передан,
+    выбирается из реестра — это самостоятельная входная граница. Если conn
+    не передан, открывается одна рабочая session через этот же backend.
     """
     from ...models import validate_entity_fqn
     from ...schema_state import get_live_schema
-    from ...sources import get_source
-    from .. import registry
 
     schema_name, table_name = validate_entity_fqn(entity_fqn)
     live = get_live_schema(source)
     if f"{schema_name}.{table_name}" not in live.tables:
         return
 
-    cfg = get_source(source)
-    dialect = registry.require_rdbms(cfg.type).dialect
+    if backend is None:
+        from ...sources import get_source
+        from .. import registry
+
+        backend = registry.require_rdbms(get_source(source).type)
+    dialect = backend.dialect
     qualified = dialect.qualify_table(schema_name, table_name)
 
     def _check_on_connection(active_conn):
@@ -334,19 +339,19 @@ def validate_table_invariants(
     if conn is not None:
         _check_on_connection(conn)
     else:
-        with _open_working_session(cfg) as fresh_conn:
+        from ...sources import get_source
+
+        with _open_working_session(get_source(source), backend) as fresh_conn:
             _check_on_connection(fresh_conn)
 
 
-def _open_working_session(cfg):
-    """Единая точка открытия рабочей session для валидации правил (патчится в тестах).
+def _open_working_session(cfg, backend):
+    """Открытие рабочей session для валидации через уже выбранный backend.
 
     Один сценарий — одно подключение: wake уже выполнен вызывающим эндпоинтом,
-    здесь открывается единственная рабочая session через backend источника.
+    повторный registry lookup не выполняется — контекст передан вызывающим.
     """
     from ...naming import container_name_for
     from ...secrets import get_secrets
-    from .. import registry
 
-    backend = registry.require_rdbms(cfg.type)
     return backend.connections.open_working(cfg, get_secrets(), container_name_for(cfg))

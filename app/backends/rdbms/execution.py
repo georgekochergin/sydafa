@@ -49,9 +49,15 @@ class ExecError(ValueError):
         self.is_conflict = is_conflict
 
 
-def _open_working(cfg):
-    """Единая точка открытия рабочей session сценария (патчится в тестах)."""
-    backend = registry.require_rdbms(cfg.type)
+def _open_working(cfg, backend=None):
+    """Единая точка открытия рабочей session сценария (патчится в тестах).
+
+    backend — уже выбранный на границе сценария контекст: используется его
+    connections без повторного registry lookup. Реестр опрашивается только
+    на самостоятельной входной границе, если контекст не передан.
+    """
+    if backend is None:
+        backend = registry.require_rdbms(cfg.type)
     return backend.connections.open_working(cfg, get_secrets(), container_name_for(cfg))
 
 
@@ -79,7 +85,7 @@ def execute_source_operations(
 
     applied_records: list[dict[str, Any]] = []
 
-    with _open_working(cfg) as conn:
+    with _open_working(cfg, backend) as conn:
         try:
             for step_idx, op in enumerate(operations):
                 op_name = getattr(op, "op", "unknown")
@@ -115,7 +121,7 @@ def execute_source_operations(
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn)
+                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn, backend=backend)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
@@ -137,7 +143,7 @@ def execute_source_operations(
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn)
+                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn, backend=backend)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
