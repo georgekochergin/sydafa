@@ -1,10 +1,12 @@
-"""Тесты выдачи привилегий публичному читателю Oracle."""
+"""Тесты выдачи привилегий публичному читателю Oracle (runtime backend)."""
 from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app import provisioning
+from app.backends.rdbms.oracle import runtime as oracle_runtime
+from app.models import SourceConfig
+from app.secrets import AppSecrets
 
 
 class TestOracleReaderGrants(unittest.TestCase):
@@ -13,17 +15,20 @@ class TestOracleReaderGrants(unittest.TestCase):
         cur = MagicMock()
         cur.fetchone.return_value = ("SYDAFA",)
         conn.cursor.return_value = cur
-        ctx = MagicMock()
-        ctx.__enter__.return_value = conn
         executed = []
 
         def record_execute(sql):
             executed.append(sql)
 
         cur.execute.side_effect = record_execute
+        config = SourceConfig(name="oracle", type="oracle", host="sydafa-src-oracle-oracle", port=1521)
+        secrets = AppSecrets(
+            dba_user="SYDAFA_ADMIN_TEST", dba_password="pw",
+            mssql_sa_password="pw", oracle_sys_password="pw",
+        )
         with patch.dict("sys.modules", {"oracledb": mock_oracledb}), \
-             patch.object(provisioning, "oracle_connection", return_value=ctx) as conn_factory:
-            provisioning._ensure_oracle_reader("oracle")
+             patch.object(oracle_runtime, "_connect", return_value=conn) as conn_factory:
+            oracle_runtime.OracleRuntime._ensure_reader("sydafa-src-oracle-oracle", 1521, secrets, "sydafa")
 
         return conn_factory, cur, executed
 
@@ -32,9 +37,9 @@ class TestOracleReaderGrants(unittest.TestCase):
         mock_oracledb.AUTH_MODE_SYSDBA = 2
         conn_factory, cur, executed = self._run_ensure(mock_oracledb)
 
-        conn_factory.assert_called_once_with(
-            source_name="oracle", service_name="sydafa", mode=mock_oracledb.AUTH_MODE_SYSDBA
-        )
+        conn_factory.assert_called_once()
+        self.assertEqual(conn_factory.call_args.args[1], "SYS")
+        self.assertEqual(conn_factory.call_args.kwargs.get("mode"), mock_oracledb.AUTH_MODE_SYSDBA)
         self.assertIn("GRANT CREATE SESSION TO sydafa", executed)
         self.assertIn("GRANT SELECT ANY TABLE TO sydafa", executed)
         self.assertIn("GRANT SELECT ANY DICTIONARY TO sydafa", executed)

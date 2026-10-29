@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 from .constants import DEFAULT_TTL_MINUTES, STATE_DIR
 from .models import ExecOperation, ExecRequest
+from .sources import find_sources_file
 
 logger = logging.getLogger("sydafa.init_apply")
 
@@ -21,31 +22,6 @@ _INIT_STATE_FILE = "init_state.json"
 def _state_file() -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return STATE_DIR / _INIT_STATE_FILE
-
-
-def find_sources_file() -> Path | None:
-    env_path = os.environ.get("SYDAFA_SOURCES_FILE") or os.environ.get("SYDAFA_INIT_FILE")
-    if env_path and Path(env_path).is_file():
-        return Path(env_path)
-    candidates = [
-        Path("/app/config/sources.json"),
-        Path("config/sources.json"),
-        Path("sources.json"),
-        Path("conf/sydafa/sources.json"),
-        Path("test/sydafa/sources.json"),
-        Path(__file__).parent.parent / "config" / "sources.json",
-        # Fallback candidates for transition
-        Path("/app/config/init.json"),
-        Path("config/init.json"),
-        Path("sydafa/init.json"),
-        Path("conf/sydafa/init.json"),
-        Path("test/sydafa/init.json"),
-        Path(__file__).parent.parent / "config" / "init.json",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    return None
 
 
 def _load_state_data() -> dict[str, Any]:
