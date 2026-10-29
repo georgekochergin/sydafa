@@ -103,6 +103,27 @@ flowchart TD
   - MSSQL слушает стандартный порт **`1433`** (DNS: `sydafa-src-mssql-<имя>:1433`).
 - **Внешние порты на хост-машине (`external_port`)**: для прямого доступа к базам из DBeaver порт хоста объявляется прямо в манифесте `sources.json`. Если `external_port` опущен или равен `null`, внешний порт не открывается, и база изолирована внутри Docker-сети.
 
+### 1.5. Карта кода: расширяемые движки источников
+
+Реализации СУБД отделены от общих алгоритмов — добавление нового RDBMS-движка не требует правок общей логики:
+
+```text
+app/
+  sources.py                  реестр экземпляров источников (из sources.json)
+  container_manager.py        Docker SDK: lifecycle, labels, volumes, сеть
+  backends/
+    registry.py               статический реестр движков (mssql | oracle), fail-fast
+    rdbms/                    общие алгоритмы RDBMS: ddl, execution, generation,
+                              mutations, data, initialization (без ветвлений по СУБД)
+    rdbms/mssql/              реализация MSSQL: dialect, connection, mutations, runtime
+    rdbms/oracle/             реализация Oracle: dialect, connection, mutations, runtime
+  generation/values.py        чистые генераторы значений (без SQL/Docker/драйверов)
+  naming.py                   имена контейнеров и томов
+```
+
+- Новый движок = пакет `backends/rdbms/<engine>/` (SQL-диалект, подключения, ограниченные случайные мутации, readiness/bootstrap) + запись в реестр и enum моделей; соответствие enum и реестра проверяется контрактным тестом, а достаточность общего слоя — fake-backend тестом.
+- Неизвестный тип движка — явный отказ на границе сценария (без fallback на «похожий» диалект): такой источник не получает ни контейнера, ни подключения, ни JDBC URL.
+
 ---
 
 ## 2. Декларативный манифест `sources.json`
