@@ -14,16 +14,17 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.exec_engine import ExecError, execute_source_operations
+from app.backends.rdbms import mutations as common_mutations
+from app.backends.rdbms.execution import ExecError, execute_source_operations
 from app.backends.rdbms.generation import (
     GenerationSession,
     append_rows,
     find_table as _find_table,
 )
+from app.backends.rdbms.oracle import mutations as oracle_mutations
 from app.backends.rdbms.mssql.dialect import MssqlDialect
 from app.backends.rdbms.oracle.dialect import OracleDialect
 from app.generation.values import GeneratorError
-from app.generators import delete_rows_conn, truncate_table_conn
 
 MSSQL = MssqlDialect()
 ORACLE = OracleDialect()
@@ -109,8 +110,8 @@ class TestErrorTextsCharacterization(unittest.TestCase):
         conn = FakeConn()
         conn.cur._rows = [(1,)]  # SELECT pk возвращает строку: удаление затрагивает зависимые
         with self.assertRaises(GeneratorError) as ctx:
-            delete_rows_conn(
-                conn, "oracle", live, "demo", "orders",
+            oracle_mutations.delete_rows(
+                conn, ORACLE, live, "demo", "orders",
                 conditions=[Condition(column="order_id", operator="=", value=1)],
                 cascade=False, batch_id=1,
             )
@@ -126,7 +127,7 @@ class TestErrorTextsCharacterization(unittest.TestCase):
         conn = FakeConn()
         conn.cur.fetchone = lambda: (5,)  # в зависимой таблице 5 строк
         with self.assertRaises(GeneratorError) as ctx:
-            truncate_table_conn(conn, "oracle", live, "demo", "orders", cascade=False, batch_id=1)
+            common_mutations.truncate_table(conn, ORACLE, live, "demo", "orders", cascade=False, batch_id=1)
         msg = str(ctx.exception)
         self.assertIn("ссылается", msg)
         self.assertIn("cascade", msg)
@@ -202,17 +203,17 @@ class TestBatchReservationCharacterization(unittest.TestCase):
         def fake_conn(*args, **kwargs):
             yield conn
 
-        import app.exec_engine as ee
-        original_conn = ee.get_connection
-        ee.get_connection = fake_conn
-        self.addCleanup(setattr, ee, "get_connection", original_conn)
+        import app.backends.rdbms.execution as ee
+        original_open = ee._open_working
+        ee._open_working = lambda cfg: fake_conn()
+        self.addCleanup(setattr, ee, "_open_working", original_open)
 
         with patch("app.schema_state.STATE_DIR", state), \
-             patch("app.exec_engine.get_source", return_value=cfg), \
-             patch("app.exec_engine.get_live_schema", return_value=live), \
-             patch("app.exec_engine.save_live_schema"), \
-             patch("app.exec_engine.sync_sequences_after_operations"), \
-             patch("app.exec_engine.append_evolution_log"):
+             patch("app.backends.rdbms.execution.get_source", return_value=cfg), \
+             patch("app.backends.rdbms.execution.get_live_schema", return_value=live), \
+             patch("app.backends.rdbms.execution.save_live_schema"), \
+             patch("app.backends.rdbms.execution.sync_sequences_after_operations"), \
+             patch("app.backends.rdbms.execution.append_evolution_log"):
             with self.assertRaises(ExecError):
                 execute_source_operations("src", [TruncateOp(entity_fqn="demo.orders")])
 

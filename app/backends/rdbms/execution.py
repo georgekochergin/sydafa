@@ -1,4 +1,10 @@
-"""Движок транзакционного выполнения операций DDL + DML (All-or-Nothing) для источников."""
+"""Единый цикл исполнения батча DDL + DML для RDBMS-источников.
+
+Один сценарий — один выбранный backend и одна рабочая session: вложенные
+операции не подключаются повторно и не делают commit. Коммит/rollback и
+порядок публикации состояния (commit БД -> LiveSchema/сиквенсы/журнал)
+сохранены прежними; известные ограничения транзакций — SIDE-01/03 (backlog).
+"""
 from __future__ import annotations
 
 import copy
@@ -6,18 +12,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from .backends import registry
-from .backends.rdbms.ddl import SchemaEvolutionError, build_ddl_and_update_state
-from .backends.rdbms.generation import append_rows, validate_table_invariants
-from .db_connectors import get_connection
-from .generators import (
-    PredicateError,
-    delete_rows_conn,
-    truncate_table_conn,
-    update_rows_conn,
-)
-from .generation.values import GeneratorError
-from .models import (
+from ...generation.values import GeneratorError
+from ...models import (
     AppendOp,
     DeleteOp,
     ExecOperation,
@@ -26,16 +22,22 @@ from .models import (
     TruncateOp,
     UpdateOp,
 )
-from .schema_state import (
+from ...naming import container_name_for
+from ...schema_state import (
     append_evolution_log,
     get_live_schema,
     get_next_batch_id,
     save_live_schema,
     sync_sequences_after_operations,
 )
-from .sources import get_source
+from ...secrets import get_secrets
+from ...sources import get_source
+from .. import registry
+from .ddl import SchemaEvolutionError, build_ddl_and_update_state
+from .generation import append_rows, validate_table_invariants
+from .mutations import PredicateError
 
-logger = logging.getLogger("sydafa.exec_engine")
+logger = logging.getLogger("sydafa.backends.rdbms.execution")
 
 
 class ExecError(ValueError):
@@ -47,6 +49,12 @@ class ExecError(ValueError):
         self.is_conflict = is_conflict
 
 
+def _open_working(cfg):
+    """Единая точка открытия рабочей session сценария (патчится в тестах)."""
+    backend = registry.require_rdbms(cfg.type)
+    return backend.connections.open_working(cfg, get_secrets(), container_name_for(cfg))
+
+
 def execute_source_operations(source_name: str, operations: list[ExecOperation]) -> ExecResult:
     """Выполняет батч операций DDL и DML в единой транзакции для указанного источника.
 
@@ -54,10 +62,8 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
     а состояние LiveSchema в памяти восстанавливается.
     """
     cfg = get_source(source_name)
-    # Выбор backend — один раз на границе сценария; DDL идёт через диалект-объект,
-    # DML-хелперы generators до этапа 5 принимают строковый ключ движка.
     backend = registry.require_rdbms(cfg.type)
-    dialect = cfg.type
+    dialect = backend.dialect
     initial_live = get_live_schema(source_name)
     live: LiveSchema = copy.deepcopy(initial_live)
 
@@ -65,12 +71,14 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
     applied_records: list[dict[str, Any]] = []
 
-    with get_connection(source_name) as conn:
+    with _open_working(cfg) as conn:
         try:
             for step_idx, op in enumerate(operations):
                 op_name = getattr(op, "op", "unknown")
                 if isinstance(op, TruncateOp):
-                    truncate_table_conn(conn, dialect, live, op.schema_, op.table, op.cascade, current_batch_id)
+                    backend.mutations.truncate_table(
+                        conn, dialect, live, op.schema_, op.table, op.cascade, current_batch_id
+                    )
                     applied_records.append({
                         "step": step_idx,
                         "op": "truncate",
@@ -79,7 +87,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 elif isinstance(op, AppendOp):
                     inserted = append_rows(
-                        conn, source_name, backend.dialect, live, op.schema_, op.table, op.rows, current_batch_id
+                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, current_batch_id
                     )
                     applied_records.append({
                         "step": step_idx,
@@ -89,11 +97,12 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, UpdateOp):
-                    updated = update_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set, current_batch_id, limit=op.limit
+                    updated = backend.mutations.update_rows(
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.set,
+                        current_batch_id, limit=op.limit,
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
-                    from . import rules_state
+                    from ... import rules_state
                     entity_fqn = op.entity_fqn
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
@@ -110,11 +119,12 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, DeleteOp):
-                    deleted = delete_rows_conn(
-                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade, current_batch_id, limit=op.limit
+                    deleted = backend.mutations.delete_rows(
+                        conn, dialect, live, op.schema_, op.table, op.predicate, op.cascade,
+                        current_batch_id, limit=op.limit,
                     )
                     # Строгий Invariant Guard (только если для таблицы включен validate_existing=True)
-                    from . import rules_state
+                    from ... import rules_state
                     entity_fqn = op.entity_fqn
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
@@ -132,7 +142,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 else:
                     # DDL операция
-                    statements, desc = build_ddl_and_update_state(op, backend.dialect, live, step_idx)
+                    statements, desc = build_ddl_and_update_state(op, dialect, live, step_idx)
                     cur = conn.cursor()
                     for stmt in statements:
                         cur.execute(stmt)

@@ -47,7 +47,7 @@ class TestContainerNames(unittest.TestCase):
 
         config = SourceConfig(name="bank", type="mssql", host="sydafa-src-mssql-bank", port=1433)
         for project in ("cleanup-test", ""):
-            with self.subTest(project=project), patch("app.container_manager.CONTAINER_PREFIX", ""), \
+            with self.subTest(project=project), patch("app.constants.CONTAINER_PREFIX", ""), \
                     patch("app.container_manager._get_context", return_value=("bridge", project)), \
                     patch("app.container_manager.get_secrets"):
                 client = MagicMock()
@@ -83,7 +83,7 @@ class TestContainerNames(unittest.TestCase):
 
     def test_default_names(self):
         cfg = SourceConfig(name="billing", type="mssql", host="sydafa-src-mssql-billing", port=1433)
-        with patch("app.container_manager.CONTAINER_PREFIX", ""):
+        with patch("app.constants.CONTAINER_PREFIX", ""):
             self.assertEqual(container_name_for(cfg), "sydafa-src-mssql-billing")
             self.assertEqual(volume_name_for(cfg), "sydafa-data-mssql-billing")
 
@@ -91,19 +91,19 @@ class TestContainerNames(unittest.TestCase):
         cfg = SourceConfig(name="billing", type="mssql", host="sydafa-src-mssql-billing", port=1433)
         for prefix in ["inst1-", "inst1", "  inst1  ", "--inst1--"]:
             with self.subTest(prefix=prefix):
-                with patch("app.container_manager.CONTAINER_PREFIX", prefix):
+                with patch("app.constants.CONTAINER_PREFIX", prefix):
                     self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
                     self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
 
     def test_prefix_starting_with_sydafa_does_not_duplicate(self):
         cfg = SourceConfig(name="db1", type="oracle", host="sydafa-src-oracle-db1", port=1521)
-        with patch("app.container_manager.CONTAINER_PREFIX", "sydafa-test-"):
+        with patch("app.constants.CONTAINER_PREFIX", "sydafa-test-"):
             self.assertEqual(container_name_for(cfg), "sydafa-test-src-oracle-db1")
             self.assertEqual(volume_name_for(cfg), "sydafa-test-data-oracle-db1")
 
     def test_source_name_with_spaces_or_dashes(self):
         cfg = SourceConfig(name="  -billing-  ", type="mssql", host="sydafa-src-mssql-billing", port=1433)
-        with patch("app.container_manager.CONTAINER_PREFIX", "inst1-"):
+        with patch("app.constants.CONTAINER_PREFIX", "inst1-"):
             self.assertEqual(container_name_for(cfg), "sydafa-inst1-src-mssql-billing")
             self.assertEqual(volume_name_for(cfg), "sydafa-inst1-data-mssql-billing")
 
@@ -111,7 +111,7 @@ class TestContainerNames(unittest.TestCase):
         from app.container_manager import build_connection_details
 
         cfg = SourceConfig(name="bank", type="mssql", host="sydafa-src-mssql-bank", port=1433)
-        with patch("app.container_manager.CONTAINER_PREFIX", "test-"):
+        with patch("app.constants.CONTAINER_PREFIX", "test-"):
             conn = build_connection_details("bank", cfg)
             self.assertEqual(conn.host, "sydafa-test-src-mssql-bank")
             self.assertIn("sydafa-test-src-mssql-bank", conn.jdbc_url)

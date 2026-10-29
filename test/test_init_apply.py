@@ -40,7 +40,7 @@ class TestInitApply(unittest.TestCase):
 
     def test_skip_when_source_already_initialized(self):
         with patch("app.init_apply.STATE_DIR", self.state), \
-             patch("app.exec_engine.execute_source_operations") as mock_exec:
+             patch("app.backends.rdbms.execution.execute_source_operations") as mock_exec:
             mark_source_initialized("mssql")
             apply_init_for_source("mssql")
             mock_exec.assert_not_called()
@@ -89,7 +89,7 @@ class TestInitApply(unittest.TestCase):
         }
         with patch("app.init_apply.STATE_DIR", self.state), \
              patch("app.init_apply.load_manifest_sources", return_value=manifest_data), \
-             patch("app.exec_engine.execute_source_operations") as mock_exec:
+             patch("app.backends.rdbms.execution.execute_source_operations") as mock_exec:
             apply_init_for_source("mssql")
             mock_exec.assert_called_once()
             self.assertTrue(is_source_initialized("mssql"))

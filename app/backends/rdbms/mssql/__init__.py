@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from ....constants import READER_PASSWORD, READER_USER, SYDAFA_DB
 from ....models import ConnectionDetails
+from . import connection as connections
+from . import mutations
 from .dialect import MssqlDialect
 from .runtime import MssqlRuntime
 
@@ -15,6 +17,8 @@ class MssqlBackend:
     def __init__(self) -> None:
         self.dialect = MssqlDialect()
         self.runtime = MssqlRuntime()
+        self.connections = connections
+        self.mutations = mutations
 
     def describe_connection(self, host: str, port: int) -> ConnectionDetails:
         return ConnectionDetails(

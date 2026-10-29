@@ -9,7 +9,11 @@ from __future__ import annotations
 import unittest
 
 from app.models import ColumnSpec, ForeignKey, TableSchema
-from app.render_ddl import map_type, qualify_table, quote_ident, render_create_table
+from app.backends.rdbms.mssql.dialect import MssqlDialect
+from app.backends.rdbms.oracle.dialect import OracleDialect
+
+MSSQL = MssqlDialect()
+ORACLE = OracleDialect()
 
 
 class TestMapTypeCharacterization(unittest.TestCase):
@@ -22,7 +26,7 @@ class TestMapTypeCharacterization(unittest.TestCase):
             "uuid": "UNIQUEIDENTIFIER",
         }
         for logical, sql_type in expected.items():
-            self.assertEqual(map_type(logical, "mssql"), sql_type)
+            self.assertEqual(MSSQL.map_type(logical), sql_type)
 
     def test_all_logical_types_oracle(self):
         expected = {
@@ -33,28 +37,28 @@ class TestMapTypeCharacterization(unittest.TestCase):
             "uuid": "VARCHAR2(36)",
         }
         for logical, sql_type in expected.items():
-            self.assertEqual(map_type(logical, "oracle"), sql_type)
+            self.assertEqual(ORACLE.map_type(logical), sql_type)
 
     def test_decimal_variants(self):
-        self.assertEqual(map_type("decimal(10,2)", "mssql"), "DECIMAL(10,2)")
-        self.assertEqual(map_type("decimal(12, 0)", "oracle"), "NUMBER(12,0)")
-        self.assertEqual(map_type("decimal(38,9)", "oracle"), "NUMBER(38,9)")
+        self.assertEqual(MSSQL.map_type("decimal(10,2)"), "DECIMAL(10,2)")
+        self.assertEqual(ORACLE.map_type("decimal(12, 0)"), "NUMBER(12,0)")
+        self.assertEqual(ORACLE.map_type("decimal(38,9)"), "NUMBER(38,9)")
 
     def test_unknown_logical_type_raises_in_both_dialects(self):
-        for dialect in ("mssql", "oracle"):
-            with self.subTest(dialect=dialect):
+        for dialect in (MSSQL, ORACLE):
+            with self.subTest(dialect=dialect.engine_type):
                 with self.assertRaises(ValueError):
-                    map_type("money", dialect)
+                    dialect.map_type("money")
 
 
 class TestIdentifierQuotingCharacterization(unittest.TestCase):
     def test_mssql_bracket_quoting(self):
-        self.assertEqual(quote_ident("order_id", "mssql"), "[order_id]")
-        self.assertEqual(qualify_table("dbo", "orders", "mssql"), "[dbo].[orders]")
+        self.assertEqual(MSSQL.quote_identifier("order_id"), "[order_id]")
+        self.assertEqual(MSSQL.qualify_table("dbo", "orders"), "[dbo].[orders]")
 
     def test_oracle_double_quote_quoting(self):
-        self.assertEqual(quote_ident("order_id", "oracle"), '"order_id"')
-        self.assertEqual(qualify_table("dbo", "orders", "oracle"), '"dbo"."orders"')
+        self.assertEqual(ORACLE.quote_identifier("order_id"), '"order_id"')
+        self.assertEqual(ORACLE.qualify_table("dbo", "orders"), '"dbo"."orders"')
 
 
 class TestRenderCreateTableCharacterization(unittest.TestCase):
@@ -78,7 +82,7 @@ class TestRenderCreateTableCharacterization(unittest.TestCase):
         )
 
     def test_mssql_create_table_full_sql(self):
-        sql = render_create_table(self._table(), "mssql")
+        sql = MSSQL.create_table(self._table())
         self.assertEqual(
             sql,
             "CREATE TABLE [dbo].[orders] (\n"
@@ -92,7 +96,7 @@ class TestRenderCreateTableCharacterization(unittest.TestCase):
         )
 
     def test_oracle_create_table_full_sql(self):
-        sql = render_create_table(self._table(), "oracle")
+        sql = ORACLE.create_table(self._table())
         self.assertEqual(
             sql,
             'CREATE TABLE "dbo"."orders" (\n'
@@ -119,12 +123,12 @@ class TestRenderCreateTableCharacterization(unittest.TestCase):
                 )
             ],
         )
-        sql = render_create_table(long_table, "oracle")
+        sql = ORACLE.create_table(long_table)
         fk_line = next(line for line in sql.splitlines() if "FOREIGN KEY" in line)
         constraint_name = fk_line.split("CONSTRAINT ")[1].split(" FOREIGN")[0]
         self.assertLessEqual(len(constraint_name.strip('"')), 30)
         # MSSQL не усекает имя констрейнта
-        sql_mssql = render_create_table(long_table, "mssql")
+        sql_mssql = MSSQL.create_table(long_table)
         fk_line_mssql = next(line for line in sql_mssql.splitlines() if "FOREIGN KEY" in line)
         constraint_mssql = fk_line_mssql.split("CONSTRAINT [")[1].split("] FOREIGN")[0]
         self.assertGreater(len(constraint_mssql), 30)
@@ -139,9 +143,9 @@ class TestRenderCreateTableCharacterization(unittest.TestCase):
                 ForeignKey(columns=["order_id"], ref_entity_fqn="core.orders", ref_columns=["order_id"])
             ],
         )
-        sql = render_create_table(table, "oracle")
+        sql = ORACLE.create_table(table)
         self.assertIn('REFERENCES "core"."orders" ("order_id")', sql)
-        sql_mssql = render_create_table(table, "mssql")
+        sql_mssql = MSSQL.create_table(table)
         self.assertIn("REFERENCES [core].[orders] ([order_id])", sql_mssql)
 
 

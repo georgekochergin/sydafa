@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
-from . import container_manager, exec_engine, rules_state, schema_state, sources
+from . import container_manager, rules_state, schema_state, sources
+from .backends.rdbms.execution import ExecError, execute_source_operations
 from .backends.rdbms.generation import validate_table_invariants
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
-from .exec_engine import ExecError
 from .models import (
     GeneratorSpec,
     LiveSchema,
@@ -200,7 +200,7 @@ def migrate_source(source: str, req: MigrateRequest, request: Request):
     request_host = request.url.hostname if request else None
     _wake(source, request_host=request_host)
     try:
-        return exec_engine.execute_source_operations(source, req.operations)
+        return execute_source_operations(source, req.operations)
     except ExecError as exc:
         code = status.HTTP_409_CONFLICT if exc.is_conflict else status.HTTP_422_UNPROCESSABLE_ENTITY
         raise HTTPException(code, str(exc)) from exc

@@ -104,10 +104,10 @@ class TestRulesAndMigrate(unittest.TestCase):
         )
         self.assertEqual(len(req.operations), 2)
 
-    @patch("app.db_connectors.get_connection")
+    @patch("app.backends.rdbms.generation._open_working_session")
     @patch("app.schema_state.get_live_schema")
     @patch("app.sources.get_source")
-    def test_validate_invariants_violation_and_success(self, mock_get_source, mock_get_live, mock_get_conn):
+    def test_validate_invariants_violation_and_success(self, mock_get_source, mock_get_live, mock_open):
         """Проверка строгой валидации существующих данных в validate_table_invariants_on_data."""
         from app.models import ColumnSpec, LiveSchema, SourceConfig, TableSchema
 
@@ -151,14 +151,14 @@ class TestRulesAndMigrate(unittest.TestCase):
         )
 
         # 1. Случай нарушения: остаток -1500.00
-        mock_get_conn.return_value = MockConn([([101], -1500.00)])
+        mock_open.return_value = MockConn([([101], -1500.00)])
         with self.assertRaises(ValueError) as ctx:
             validate_table_invariants("mssql", "core.transactions", profile)
         self.assertIn("отрицательн" if "отрицательн" in str(ctx.exception) else "нарушает ограничение", str(ctx.exception))
         self.assertIn("101", str(ctx.exception))
 
         # 2. Случай успеха: нет строк с нарушениями (пустая выборка HAVING)
-        mock_get_conn.return_value = MockConn([])
+        mock_open.return_value = MockConn([])
         # Не должно вызывать исключений
         validate_table_invariants("mssql", "core.transactions", profile)
 
@@ -168,7 +168,7 @@ class TestRulesAndMigrate(unittest.TestCase):
                 CumulativeBalanceInvariant(amount_column="amount", min_balance=0.0)
             ]
         )
-        mock_get_conn.return_value = MockConn([(-500.0,)])
+        mock_open.return_value = MockConn([(-500.0,)])
         with self.assertRaises(ValueError) as ctx:
             validate_table_invariants("mssql", "core.transactions", global_profile)
         self.assertIn("глобальный", str(ctx.exception))
@@ -176,7 +176,7 @@ class TestRulesAndMigrate(unittest.TestCase):
     def test_invariant_guard_in_exec_engine(self):
         """Проверка условного срабатывания Invariant Guard в exec_engine при update/delete."""
         from app.models import DeleteOp, LiveSchema, TableSchema, ColumnSpec
-        from app.exec_engine import ExecError
+        from app.backends.rdbms.execution import ExecError
 
         table = TableSchema(
             name="txs",

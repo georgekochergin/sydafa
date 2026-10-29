@@ -17,7 +17,9 @@ from app.models import (
     TruncateOp,
     UpdateOp,
 )
-from app.generators import delete_rows_conn, truncate_table_conn, update_rows_conn
+from app.backends.rdbms import mutations as common_mutations
+from app.backends.rdbms.mssql import mutations as mssql_mutations
+from app.backends.rdbms.oracle import mutations as oracle_mutations
 from app.backends.rdbms.ddl import build_ddl_and_update_state
 from app.backends.rdbms.mssql.dialect import MssqlDialect
 from app.backends.rdbms.oracle.dialect import OracleDialect
@@ -146,8 +148,7 @@ class TestBatchIdAudit(unittest.TestCase):
     def test_update_archives_snapshot_and_sets_batch_id(self):
         live = _build_live_with_audit()
         conn = FakeConn()
-        n = update_rows_conn(
-            conn, "oracle", live, "demo", "customers",
+        n = oracle_mutations.update_rows(conn, ORACLE, live, "demo", "customers",
             conditions=[Condition(column="customer_id", operator="=", value=1)],
             set_values={"name": "NewName"},
             batch_id=7,
@@ -169,8 +170,7 @@ class TestBatchIdAudit(unittest.TestCase):
     def test_update_ignores_system_columns_in_set(self):
         live = _build_live_with_audit()
         conn = FakeConn()
-        update_rows_conn(
-            conn, "oracle", live, "demo", "customers",
+        oracle_mutations.update_rows(conn, ORACLE, live, "demo", "customers",
             conditions=[Condition(column="customer_id", operator="=", value=1)],
             set_values={"name": "NewName", BATCH_ID_COLUMN: 999, EXEC_BATCH_ID_COLUMN: 999},
             batch_id=7,
@@ -182,8 +182,7 @@ class TestBatchIdAudit(unittest.TestCase):
     def test_delete_archives_to_del(self):
         live = _build_live_with_audit()
         conn = FakeConn()
-        n = delete_rows_conn(
-            conn, "oracle", live, "demo", "customers",
+        n = oracle_mutations.delete_rows(conn, ORACLE, live, "demo", "customers",
             conditions=[Condition(column="customer_id", operator="=", value=1)],
             cascade=False,
             batch_id=9,
@@ -198,7 +197,7 @@ class TestBatchIdAudit(unittest.TestCase):
     def test_truncate_archives_all_to_del(self):
         live = _build_live_with_audit()
         conn = FakeConn()
-        truncate_table_conn(conn, "oracle", live, "demo", "customers", batch_id=5)
+        common_mutations.truncate_table(conn, ORACLE, live, "demo", "customers", batch_id=5)
         archive_sql, archive_params = conn.cur.executed[0]
         self.assertIn(f'INSERT INTO "demo"."{_del_table_name("customers")}"', archive_sql)
         self.assertEqual(archive_params[0], 5)  # _exec_batch_id = batch_id
@@ -234,9 +233,7 @@ class TestBatchIdAudit(unittest.TestCase):
 
         # 3. update_rows (DML для добавленной колонки)
         conn = FakeConn()
-        updated = update_rows_conn(
-            conn,
-            "mssql",
+        updated = mssql_mutations.update_rows(conn, MSSQL,
             live,
             "demo",
             "contracts",
@@ -266,9 +263,7 @@ class TestBatchIdAudit(unittest.TestCase):
         # 1. Update N random rows without PK
         conn = FakeConn()
         conn.cur.rowcount = 10
-        updated = update_rows_conn(
-            conn,
-            "mssql",
+        updated = mssql_mutations.update_rows(conn, MSSQL,
             live,
             "demo",
             "logs",
@@ -289,9 +284,7 @@ class TestBatchIdAudit(unittest.TestCase):
         # 2. Delete N random rows without PK
         conn_del = FakeConn()
         conn_del.cur.rowcount = 5
-        deleted = delete_rows_conn(
-            conn_del,
-            "mssql",
+        deleted = mssql_mutations.delete_rows(conn_del, MSSQL,
             live,
             "demo",
             "logs",
@@ -327,9 +320,7 @@ class TestBatchIdAudit(unittest.TestCase):
         conn = FakeConn()
         conn.cur.rowcount = 2
         conn.cur._rows = [("AAARowid1",), ("AAARowid2",)]
-        updated = update_rows_conn(
-            conn,
-            "oracle",
+        updated = oracle_mutations.update_rows(conn, ORACLE,
             live,
             "demo",
             "logs",
@@ -362,9 +353,7 @@ class TestBatchIdAudit(unittest.TestCase):
         conn_del = FakeConn()
         conn_del.cur.rowcount = 2
         conn_del.cur._rows = [("AAARowid1",), ("AAARowid2",)]
-        deleted = delete_rows_conn(
-            conn_del,
-            "oracle",
+        deleted = oracle_mutations.delete_rows(conn_del, ORACLE,
             live,
             "demo",
             "logs",
@@ -404,13 +393,13 @@ class TestBatchIdAudit(unittest.TestCase):
         conn = FakeConn()
         conn.cur._rows = []  # Ничего не найдено
 
-        updated = update_rows_conn(conn, "oracle", live, "demo", "empty_tbl", conditions=[], set_values={"v": 1}, limit=5)
+        updated = oracle_mutations.update_rows(conn, ORACLE, live, "demo", "empty_tbl", conditions=[], set_values={"v": 1}, limit=5)
         self.assertEqual(updated, 0)
         self.assertEqual(len(conn.cur.executed), 1)  # Только запрос ROWID
 
         conn_del = FakeConn()
         conn_del.cur._rows = []
-        deleted = delete_rows_conn(conn_del, "oracle", live, "demo", "empty_tbl", conditions=[], cascade=False, limit=5)
+        deleted = oracle_mutations.delete_rows(conn_del, ORACLE, live, "demo", "empty_tbl", conditions=[], cascade=False, limit=5)
         self.assertEqual(deleted, 0)
         self.assertEqual(len(conn_del.cur.executed), 1)  # Только запрос ROWID
 

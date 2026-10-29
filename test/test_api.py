@@ -63,7 +63,7 @@ class TestSydafaAPI(unittest.TestCase):
     def test_migrate_source_endpoint(self):
         with patch("app.sources.source_names", return_value=["mssql"]), \
              patch("app.main._wake", return_value={}), \
-             patch("app.exec_engine.execute_source_operations") as mock_exec:
+             patch("app.main.execute_source_operations") as mock_exec:
             mock_exec.return_value = MagicMock(status="ok", executed=1, applied=[{"op": "create_schema"}])
             resp = self.client.post("/sources/mssql/migrate", json={
                 "operations": [{"op": "create_schema", "name": "demo"}]

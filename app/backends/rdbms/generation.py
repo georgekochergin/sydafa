@@ -331,7 +331,19 @@ def validate_table_invariants(
     if conn is not None:
         _check_on_connection(conn)
     else:
-        from ...db_connectors import get_connection
-
-        with get_connection(source) as fresh_conn:
+        with _open_working_session(cfg) as fresh_conn:
             _check_on_connection(fresh_conn)
+
+
+def _open_working_session(cfg):
+    """Единая точка открытия рабочей session для валидации правил (патчится в тестах).
+
+    Один сценарий — одно подключение: wake уже выполнен вызывающим эндпоинтом,
+    здесь открывается единственная рабочая session через backend источника.
+    """
+    from ...naming import container_name_for
+    from ...secrets import get_secrets
+    from .. import registry
+
+    backend = registry.require_rdbms(cfg.type)
+    return backend.connections.open_working(cfg, get_secrets(), container_name_for(cfg))

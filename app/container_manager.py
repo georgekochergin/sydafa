@@ -15,10 +15,9 @@ from docker.errors import NotFound
 
 from .backends import registry
 from .backends.contracts import ReadyContext
-from .constants import (
-    CONTAINER_PREFIX,
-    DEFAULT_TTL_MINUTES,
-)
+from . import constants
+from .constants import DEFAULT_TTL_MINUTES
+from .naming import container_name_for, sanitize_user_token, volume_name_for
 from .models import ConnectionDetails, SourceConfig
 from .secrets import get_secrets
 from .sources import get_source
@@ -35,44 +34,6 @@ def _source_lock(source: str) -> threading.Lock:
         if source not in _locks:
             _locks[source] = threading.RLock()
         return _locks[source]
-
-
-def sanitize_user_token(token: str | None) -> str:
-    """Очищает пользовательский токен (префикс или имя инстанса) от пробелов, краевых дефисов и спецсимволов."""
-    if not token:
-        return ""
-    # Заменяем недопустимые спецсимволы и пробелы на дефис
-    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(token).strip())
-    # Убираем дефисы, точки и подчеркивания по краям и приводим к нижнему регистру
-    return cleaned.strip("-._").lower()
-
-
-def container_name_for(config: SourceConfig) -> str:
-    prefix = sanitize_user_token(CONTAINER_PREFIX)
-    src_name = sanitize_user_token(config.name)
-    parts: list[str] = []
-    if prefix.startswith("sydafa"):
-        parts.append(prefix)
-    else:
-        parts.append("sydafa")
-        if prefix:
-            parts.append(prefix)
-    parts.extend(["src", config.type, src_name])
-    return "-".join(parts)
-
-
-def volume_name_for(config: SourceConfig) -> str:
-    prefix = sanitize_user_token(CONTAINER_PREFIX)
-    src_name = sanitize_user_token(config.name)
-    parts: list[str] = []
-    if prefix.startswith("sydafa"):
-        parts.append(prefix)
-    else:
-        parts.append("sydafa")
-        if prefix:
-            parts.append(prefix)
-    parts.extend(["data", config.type, src_name])
-    return "-".join(parts)
 
 
 def _get_docker_client() -> docker.DockerClient:
@@ -197,7 +158,7 @@ def _run_container(
 
     labels = {
         "sydafa.managed": "true",
-        "sydafa.prefix": CONTAINER_PREFIX,
+        "sydafa.prefix": constants.CONTAINER_PREFIX,
         "sydafa.source": source_name,
     }
     if project_name:

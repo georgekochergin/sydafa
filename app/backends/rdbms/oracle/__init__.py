@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from ....constants import READER_PASSWORD, READER_USER, SYDAFA_DB
 from ....models import ConnectionDetails
+from . import connection as connections
+from . import mutations
 from .dialect import OracleDialect
 from .runtime import OracleRuntime
 
@@ -15,6 +17,8 @@ class OracleBackend:
     def __init__(self) -> None:
         self.dialect = OracleDialect()
         self.runtime = OracleRuntime()
+        self.connections = connections
+        self.mutations = mutations
 
     def describe_connection(self, host: str, port: int) -> ConnectionDetails:
         return ConnectionDetails(
