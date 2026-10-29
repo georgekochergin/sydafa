@@ -57,7 +57,7 @@ sydafa поддерживает только реляционные батч-и�
 1. **Драйвер Redpanda**: контейнер `docker.redpanda.com/redpandadata/redpanda:latest` (dev-режим, минимальный RAM), управление топиками через Kafka AdminClient.
 2. **PostgreSQL storage backend**: `wal_level=logical`, слот репликации `pg_create_logical_replication_slot('sydafa_cdc', 'pgoutput')`.
 3. **Легковесный асинхронный streaming worker** (`asyncpg`/`psycopg2` + `confluent-kafka`/`aiokafka`): читает события WAL и отправляет их в топики Redpanda.
-4. **Migration LSN Barrier**: фиксация LSN транзакции в `exec_engine.py` и ожидание отправки всех событий до ответа на `POST /migrate` (компенсация асинхронности доставки).
+4. **Migration LSN Barrier**: фиксация LSN транзакции в `app/backends/rdbms/execution.py` (после рефакторинга source-адаптеров) и ожидание отправки всех событий до ответа на `POST /migrate` (компенсация асинхронности доставки).
 
 Обоснование выбора: полное сохранение транзакционной семантики DML и реалистичный enterprise-формат CDC. Альтернативы отклонены — «чистый» брокер не даёт нативных UPDATE/DELETE (только эмуляция tombstone), гибрид двух драйверов удваивает поддержку кодовой базы.
 
@@ -107,7 +107,7 @@ sydafa поддерживает только реляционные батч-и�
 
 ### Контекст
 
-Миграции исполняются в `app/exec_engine.py`. Структура таблиц, сиквенсы и журнал эволюции сохраняются отдельно от СУБД через `app/schema_state.py`. Исходное наблюдение: SIDE-03 в плане `sydafa-source-adapters-plan.md` от 2026-10-29 (`~/ai_plans/dlh_poc/2026-10-29/`).
+Миграции исполняются в `app/backends/rdbms/execution.py` (после рефакторинга source-адаптеров; ранее — `exec_engine.py`). Структура таблиц, сиквенсы и журнал эволюции сохраняются отдельно от СУБД через `app/schema_state.py`. Исходное наблюдение: SIDE-03 в плане `sydafa-source-adapters-plan.md` от 2026-10-29 (`~/ai_plans/dlh_poc/2026-10-29/`).
 
 ### Проблема
 
@@ -131,7 +131,7 @@ Commit БД предшествует сохранению LiveSchema, синхр
 
 ### Контекст
 
-`app/exec_engine.py` выполняет DDL и DML одним батчем; `app/generators.py` при очистке таблицы без dependents использует SQL TRUNCATE. README и docstring execution engine описывают All-or-Nothing. Исходное наблюдение: SIDE-01 в плане от 2026-10-29.
+`app/backends/rdbms/execution.py` выполняет DDL и DML одним батчем; физическую очистку строит `dialect.clear_table()` в `app/backends/rdbms/mutations.py` (без dependents — SQL TRUNCATE). README и docstring execution engine описывают All-or-Nothing. Внутренние границы транзакций движков уже описаны `TransactionSemantics` в `app/backends/rdbms/contracts.py` (рефакторинг адаптеров); матрица гарантий в документации и физические failure-тесты остаются в этой задаче. Исходное наблюдение: SIDE-01 в плане от 2026-10-29.
 
 ### Проблема
 
@@ -203,7 +203,7 @@ Lifecycle lock не охватывает весь migrate-сценарий; па
 
 ### Контекст
 
-`app/rules_state.py:validate_table_invariants_on_data()` проверяет cumulative_balance SQL-запросом. Функция вызывается при проверке правил и изменяющих операций. Исходное наблюдение: SIDE-09 в плане от 2026-10-29.
+`app/backends/rdbms/generation.py:validate_table_invariants()` проверяет cumulative_balance SQL-запросом (после рефакторинга адаптеров; ранее — `rules_state.validate_table_invariants_on_data`). Функция вызывается при проверке правил и изменяющих операций. Исходное наблюдение: SIDE-09 в плане от 2026-10-29.
 
 ### Проблема
 
@@ -323,8 +323,8 @@ GET `/sources/{source}/status` вызывает `app/container_manager.py:get_ru
 
 ### Контекст
 
-- `GenerationSession._preload_state()` в `app/generators.py` предзагружает накопительные балансы инварианта `cumulative_balance` SQL-запросами `SUM` по таблице; любые исключения при чтении подавляются (`except Exception: pass`).
-- `validate_table_invariants_on_data()` в `app/rules_state.py` молча завершается успехом, если таблицы нет в live-схеме (`return` без проверки).
+- `GenerationSession._preload_state()` в `app/backends/rdbms/generation.py` предзагружает накопительные балансы инварианта `cumulative_balance` SQL-запросами `SUM` по таблице; любые исключения при чтении подавляются (`except Exception: pass`).
+- `validate_table_invariants()` в `app/backends/rdbms/generation.py` молча завершается успехом, если таблицы нет в live-схеме (`return` без проверки).
 - Запись №7 покрывает fail-open проверочного запроса; здесь — две другие точки того же семейства. Исходное наблюдение: D-6 в `proposal-1.md` от 2026-10-29 (`~/ai_plans/dlh_poc/2026-10-29/`); рефакторинг source-адаптеров сохраняет текущее поведение (characterization-тест) и не включает исправление.
 
 ### Проблема
@@ -351,8 +351,8 @@ GET `/sources/{source}/status` вызывает `app/container_manager.py:get_ru
 
 ### Контекст
 
-- `_pick_existing_pk()` в `app/generators.py` выбирает родителя для FK: `SELECT <pk> FROM <parent>` без ограничений, `fetchall()` всех строк и `random.choice`.
-- Вызов выполняется на каждую генерируемую строку с FK (`_resolve_fk_values` → `_mint_new_row`); `AppendOp` допускает до 100 000 строк за операцию.
+- `pick_existing_pk()` в `app/backends/rdbms/data.py` выбирает родителя для FK: `SELECT <pk> FROM <parent>` без ограничений, `fetchall()` всех строк и `random.choice`.
+- Вызов выполняется на каждую генерируемую строку с FK (`_resolve_fk_values` → `mint_new_row`, оба в `app/backends/rdbms/generation.py`); `AppendOp` допускает до 100 000 строк за операцию.
 - Проблема производительности, не блокирующая рефакторинг source-адаптеров; исходное наблюдение — верификация кода в `proposal-1.md` от 2026-10-29.
 
 ### Проблема
@@ -379,7 +379,7 @@ GET `/sources/{source}/status` вызывает `app/container_manager.py:get_ru
 
 ### Контекст
 
-- `execute_source_operations()` в `app/exec_engine.py` назначает `is_conflict` по вхождению подстрок `"ссыла"`/`"cascade"` в текст исключения `GeneratorError`; тексты формируются в `app/generators.py`.
+- `execute_source_operations()` в `app/backends/rdbms/execution.py` назначает `is_conflict` по вхождению подстрок `"ссыла"`/`"cascade"` в текст исключения `GeneratorError`; тексты формируются в `app/generation/values.py` и `app/backends/rdbms/{mutations,generation}.py`.
 - Рефакторинг адаптеров замораживает тексты ошибок и добавляет characterization-тесты 409/422 (D-7 в `proposal-1.md` от 2026-10-29); маппинг по подстрокам сохраняется.
 
 ### Проблема
@@ -406,7 +406,7 @@ GET `/sources/{source}/status` вызывает `app/container_manager.py:get_ru
 
 ### Контекст
 
-- `_find_table()` в `app/generators.py` при отсутствии ключа `schema.table` в `LiveSchema.tables` ищет таблицу по имени по всем схемам и возвращает первое совпадение.
+- `find_table()` в `app/backends/rdbms/generation.py` при отсутствии ключа `schema.table` в `LiveSchema.tables` ищет таблицу по имени по всем схемам и возвращает первое совпадение.
 - Поведение сохраняется рефакторингом адаптеров и фиксируется characterization-тестом (D-8 в `proposal-1.md` от 2026-10-29).
 
 ### Проблема
@@ -415,7 +415,7 @@ GET `/sources/{source}/status` вызывает `app/container_manager.py:get_ru
 
 Пример: в схемах `sales` и `archive` есть таблицы `items`; обращение к `archive.items` при отсутствии ключа выполнится над `sales.items`.
 
-Кейс воспроизведения: модульный тест `_find_table` с двумя одноимёнными таблицами в разных схемах — fallback возвращает первую по порядку словаря, а не запрошенную схему.
+Кейс воспроизведения: модульный тест `find_table` с двумя одноимёнными таблицами в разных схемах — fallback возвращает первую по порядку словаря, а не запрошенную схему.
 
 ### Предпочтительный путь решения
 
