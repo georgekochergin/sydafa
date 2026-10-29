@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from .backends import registry
+from .backends.rdbms.ddl import SchemaEvolutionError, build_ddl_and_update_state
 from .db_connectors import get_connection
 from .generators import (
     GeneratorError,
@@ -24,7 +26,6 @@ from .models import (
     TruncateOp,
     UpdateOp,
 )
-from .schema_engine import SchemaEvolutionError, _build_ddl_and_update_state
 from .schema_state import (
     append_evolution_log,
     get_live_schema,
@@ -53,6 +54,9 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
     а состояние LiveSchema в памяти восстанавливается.
     """
     cfg = get_source(source_name)
+    # Выбор backend — один раз на границе сценария; DDL идёт через диалект-объект,
+    # DML-хелперы generators до этапа 5 принимают строковый ключ движка.
+    backend = registry.require_rdbms(cfg.type)
     dialect = cfg.type
     initial_live = get_live_schema(source_name)
     live: LiveSchema = copy.deepcopy(initial_live)
@@ -128,7 +132,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
 
                 else:
                     # DDL операция
-                    statements, desc = _build_ddl_and_update_state(op, dialect, live, step_idx)
+                    statements, desc = build_ddl_and_update_state(op, backend.dialect, live, step_idx)
                     cur = conn.cursor()
                     for stmt in statements:
                         cur.execute(stmt)

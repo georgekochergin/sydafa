@@ -18,7 +18,13 @@ from app.models import (
     UpdateOp,
 )
 from app.generators import delete_rows_conn, truncate_table_conn, update_rows_conn
-from app.schema_engine import _build_ddl_and_update_state, _del_table_name, _upd_table_name
+from app.backends.rdbms.ddl import build_ddl_and_update_state
+from app.backends.rdbms.mssql.dialect import MssqlDialect
+from app.backends.rdbms.oracle.dialect import OracleDialect
+from app.backends.rdbms.schema import del_table_name as _del_table_name, upd_table_name as _upd_table_name
+
+MSSQL = MssqlDialect()
+ORACLE = OracleDialect()
 
 
 class FakeCursor:
@@ -50,8 +56,8 @@ class FakeConn:
 def _build_live_with_audit() -> LiveSchema:
     """Собирает live-схему demo с таблицей customers и пустыми _upd_/_del_ через schema_engine."""
     live = LiveSchema(schemas=[], tables={})
-    _build_ddl_and_update_state(CreateSchemaOp(name="demo"), "oracle", live, 0)
-    _build_ddl_and_update_state(
+    build_ddl_and_update_state(CreateSchemaOp(name="demo"), ORACLE, live, 0)
+    build_ddl_and_update_state(
         CreateTableOp(
             entity_fqn="demo.customers",
             primary_key=["customer_id"],
@@ -59,8 +65,7 @@ def _build_live_with_audit() -> LiveSchema:
                 ColumnSpec(name="customer_id", type="bigint", generator={"kind": "sequence"}),
                 ColumnSpec(name="name", type="string"),
             ],
-        ),
-        "mssql",
+        ), MSSQL,
         live,
         1,
     )
@@ -213,7 +218,7 @@ class TestBatchIdAudit(unittest.TestCase):
             ],
             foreign_keys=[],
         )
-        stmts, _ = _build_ddl_and_update_state(create_op, "mssql", live, 0)
+        stmts, _ = build_ddl_and_update_state(create_op, MSSQL, live, 0)
         self.assertTrue(len(stmts) > 0)
         self.assertIn("demo.contracts", live.tables)
 
@@ -223,7 +228,7 @@ class TestBatchIdAudit(unittest.TestCase):
             entity_fqn="demo.contracts",
             column=ColumnSpec(name="status", type="string", generator={"kind": "choice", "values": ["NEW"]}),
         )
-        stmts2, _ = _build_ddl_and_update_state(add_col_op, "mssql", live, 1)
+        stmts2, _ = build_ddl_and_update_state(add_col_op, MSSQL, live, 1)
         self.assertTrue(len(stmts2) > 0)
         self.assertIn("status", live.tables["demo.contracts"].column_names)
 
@@ -254,7 +259,7 @@ class TestBatchIdAudit(unittest.TestCase):
                 ColumnSpec(name="level", type="string", generator={"kind": "choice", "values": ["INFO", "ERROR"]}),
             ],
         )
-        _build_ddl_and_update_state(create_op, "mssql", live, 0)
+        build_ddl_and_update_state(create_op, MSSQL, live, 0)
         self.assertIn("demo.logs", live.tables)
         self.assertEqual(live.tables["demo.logs"].primary_key, [])
 
@@ -315,7 +320,7 @@ class TestBatchIdAudit(unittest.TestCase):
                 ColumnSpec(name="level", type="string", generator={"kind": "choice", "values": ["INFO", "ERROR"]}),
             ],
         )
-        _build_ddl_and_update_state(create_op, "oracle", live, 0)
+        build_ddl_and_update_state(create_op, ORACLE, live, 0)
         self.assertEqual(live.tables["demo.logs"].primary_key, [])
 
         # 1. Update N random rows without PK
@@ -395,7 +400,7 @@ class TestBatchIdAudit(unittest.TestCase):
             primary_key=[],
             columns=[ColumnSpec(name="v", type="bigint")],
         )
-        _build_ddl_and_update_state(create_op, "oracle", live, 0)
+        build_ddl_and_update_state(create_op, ORACLE, live, 0)
         conn = FakeConn()
         conn.cur._rows = []  # Ничего не найдено
 

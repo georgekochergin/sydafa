@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.init_apply import compile_schema_decl_to_operations
+from app.backends.rdbms.initialization import compile_schema_decl_to_operations
 from app.models import (
     CreateTableOp,
     CumulativeBalanceInvariant,
