@@ -1,11 +1,14 @@
-"""Управление персистентным состоянием правил генерации и инвариантов данных."""
+"""Хранение и CRUD профилей правил генерации (только персистентное состояние).
+
+SQL-проверки инвариантов на данных вынесены в
+`app/backends/rdbms/generation.py:validate_table_invariants` — хранилище правил
+не открывает соединения с СУБД.
+"""
 from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
-from typing import Any
 
 from .constants import STATE_DIR
 from .models import TableRuleProfile, validate_entity_fqn
@@ -90,67 +93,3 @@ def reset_rules_cache(source: str) -> None:
             rf.unlink()
         except Exception:
             pass
-
-
-def validate_table_invariants_on_data(
-    source: str,
-    entity_fqn: str,
-    profile: TableRuleProfile,
-    conn: Any = None,
-) -> None:
-    """Проверяет соответствие существующих данных в СУБД правилам инвариантов profile.
-
-    Если обнаружены нарушения, выбрасывает ValueError с подробным описанием нарушений.
-    Если таблица пуста или нарушений нет, завершается успешно.
-    """
-    from .db_connectors import get_connection
-    from .models import CumulativeBalanceInvariant
-    from .render_ddl import qualify_table, quote_ident
-    from .schema_state import get_live_schema
-    from .sources import get_source
-
-    schema_name, table_name = validate_entity_fqn(entity_fqn)
-    live = get_live_schema(source)
-    if f"{schema_name}.{table_name}" not in live.tables:
-        return
-
-    cfg = get_source(source)
-    dialect = cfg.type
-    qualified = qualify_table(schema_name, table_name, dialect)
-
-    def _check_on_connection(active_conn):
-        cur = active_conn.cursor()
-        for inv in profile.invariants:
-            if isinstance(inv, CumulativeBalanceInvariant):
-                amt_col = quote_ident(inv.amount_column, dialect)
-                if inv.partition_by:
-                    part_cols = ", ".join(quote_ident(c, dialect) for c in inv.partition_by)
-                    sql = f"SELECT {part_cols}, SUM({amt_col}) FROM {qualified} GROUP BY {part_cols} HAVING SUM({amt_col}) < {inv.min_balance}"
-                else:
-                    sql = f"SELECT SUM({amt_col}) FROM {qualified} HAVING SUM({amt_col}) < {inv.min_balance}"
-                try:
-                    cur.execute(sql)
-                    violations = cur.fetchall()
-                except Exception as e:
-                    logger.warning("Не удалось выполнить проверочный запрос для '%s': %s", entity_fqn, e)
-                    violations = []
-
-                if violations:
-                    sample = violations[0]
-                    sum_val = sample[-1]
-                    if inv.partition_by:
-                        part_vals = list(sample[: len(inv.partition_by)])
-                        part_desc = f"для партиции {part_vals} "
-                    else:
-                        part_desc = "глобальный "
-                    raise ValueError(
-                        f"Невозможно применить правило cumulative_balance к сущности '{entity_fqn}': "
-                        f"{part_desc}текущий накопленный баланс равен {sum_val}, "
-                        f"что нарушает ограничение min_balance={inv.min_balance}"
-                    )
-
-    if conn is not None:
-        _check_on_connection(conn)
-    else:
-        with get_connection(source) as fresh_conn:
-            _check_on_connection(fresh_conn)

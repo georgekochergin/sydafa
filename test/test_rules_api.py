@@ -12,6 +12,7 @@ from app.models import (
     TableRuleProfile,
 )
 from app import rules_state
+from app.backends.rdbms.generation import validate_table_invariants
 
 
 class TestRulesAndMigrate(unittest.TestCase):
@@ -152,14 +153,14 @@ class TestRulesAndMigrate(unittest.TestCase):
         # 1. Случай нарушения: остаток -1500.00
         mock_get_conn.return_value = MockConn([([101], -1500.00)])
         with self.assertRaises(ValueError) as ctx:
-            rules_state.validate_table_invariants_on_data("mssql", "core.transactions", profile)
+            validate_table_invariants("mssql", "core.transactions", profile)
         self.assertIn("отрицательн" if "отрицательн" in str(ctx.exception) else "нарушает ограничение", str(ctx.exception))
         self.assertIn("101", str(ctx.exception))
 
         # 2. Случай успеха: нет строк с нарушениями (пустая выборка HAVING)
         mock_get_conn.return_value = MockConn([])
         # Не должно вызывать исключений
-        rules_state.validate_table_invariants_on_data("mssql", "core.transactions", profile)
+        validate_table_invariants("mssql", "core.transactions", profile)
 
         # 3. Случай глобального баланса без partition_by с нарушением
         global_profile = TableRuleProfile(
@@ -169,7 +170,7 @@ class TestRulesAndMigrate(unittest.TestCase):
         )
         mock_get_conn.return_value = MockConn([(-500.0,)])
         with self.assertRaises(ValueError) as ctx:
-            rules_state.validate_table_invariants_on_data("mssql", "core.transactions", global_profile)
+            validate_table_invariants("mssql", "core.transactions", global_profile)
         self.assertIn("глобальный", str(ctx.exception))
 
     def test_invariant_guard_in_exec_engine(self):

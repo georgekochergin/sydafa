@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 
 from . import container_manager, exec_engine, rules_state, schema_state, sources
+from .backends.rdbms.generation import validate_table_invariants
 from .constants import DEFAULT_TTL_MINUTES, IDLE_WATCH_SECONDS, MAX_TTL_MINUTES, SYDAFA_DB
 from .exec_engine import ExecError
 from .models import (
@@ -284,7 +285,7 @@ def add_table_invariant(
                 invariant.validate_existing = True
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile)
         rules_state.set_table_rules(source, entity_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err
@@ -338,11 +339,11 @@ def set_table_rule_profile(
                     inv.validate_existing = True
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile)
         elif any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
             request_host = request.url.hostname if request else None
             _wake(source, request_host=request_host)
-            rules_state.validate_table_invariants_on_data(source, entity_fqn, profile)
+            validate_table_invariants(source, entity_fqn, profile)
         rules_state.set_table_rules(source, entity_fqn, profile)
     except ValueError as err:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(err)) from err

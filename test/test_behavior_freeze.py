@@ -15,13 +15,18 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.exec_engine import ExecError, execute_source_operations
-from app.generators import (
+from app.backends.rdbms.generation import (
     GenerationSession,
-    GeneratorError,
-    _find_table,
-    delete_rows_conn,
-    truncate_table_conn,
+    append_rows,
+    find_table as _find_table,
 )
+from app.backends.rdbms.mssql.dialect import MssqlDialect
+from app.backends.rdbms.oracle.dialect import OracleDialect
+from app.generation.values import GeneratorError
+from app.generators import delete_rows_conn, truncate_table_conn
+
+MSSQL = MssqlDialect()
+ORACLE = OracleDialect()
 from app.main import app
 from app.models import (
     ColumnSpec,
@@ -139,9 +144,8 @@ class TestErrorTextsCharacterization(unittest.TestCase):
         )
         live = LiveSchema(schemas=["demo"], tables={"demo.customers": parent, "demo.orders": child})
         conn = FakeConn()  # fetchall -> [] : родитель пуст
-        from app.generators import append_rows_conn
         with self.assertRaises(GeneratorError) as ctx:
-            append_rows_conn(conn, "demo", "oracle", live, "demo", "orders", rows=1, batch_id=1)
+            append_rows(conn, "demo", ORACLE, live, "demo", "orders", rows=1, batch_id=1)
         msg = str(ctx.exception)
         self.assertIn("родительская таблица пуста", msg)
         self.assertIn("Сначала выполните append", msg)
@@ -176,7 +180,7 @@ class TestFallbacksCharacterization(unittest.TestCase):
         conn = FakeConn()
         conn.cur.execute = lambda sql, params=None: (_ for _ in ()).throw(RuntimeError("db read failed"))
         profile = TableRuleProfile()  # инвариантов нет: preload не выполняет SQL
-        session = GenerationSession(conn, "mssql", live, table, profile)
+        session = GenerationSession(conn, MSSQL, live, table, profile)
         self.assertEqual(session.balances, {})
 
 

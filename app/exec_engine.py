@@ -8,15 +8,15 @@ from typing import Any
 
 from .backends import registry
 from .backends.rdbms.ddl import SchemaEvolutionError, build_ddl_and_update_state
+from .backends.rdbms.generation import append_rows, validate_table_invariants
 from .db_connectors import get_connection
 from .generators import (
-    GeneratorError,
     PredicateError,
-    append_rows_conn,
     delete_rows_conn,
     truncate_table_conn,
     update_rows_conn,
 )
+from .generation.values import GeneratorError
 from .models import (
     AppendOp,
     DeleteOp,
@@ -78,8 +78,8 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     })
 
                 elif isinstance(op, AppendOp):
-                    inserted = append_rows_conn(
-                        conn, source_name, dialect, live, op.schema_, op.table, op.rows, current_batch_id
+                    inserted = append_rows(
+                        conn, source_name, backend.dialect, live, op.schema_, op.table, op.rows, current_batch_id
                     )
                     applied_records.append({
                         "step": step_idx,
@@ -98,7 +98,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            rules_state.validate_table_invariants_on_data(source_name, entity_fqn, profile, conn=conn)
+                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
@@ -119,7 +119,7 @@ def execute_source_operations(source_name: str, operations: list[ExecOperation])
                     profile = rules_state.get_table_rules(source_name, entity_fqn)
                     if profile and any(getattr(inv, "validate_existing", False) for inv in profile.invariants):
                         try:
-                            rules_state.validate_table_invariants_on_data(source_name, entity_fqn, profile, conn=conn)
+                            validate_table_invariants(source_name, entity_fqn, profile, conn=conn)
                         except ValueError as err:
                             raise ExecError(step_idx, op_name, str(err)) from err
 
