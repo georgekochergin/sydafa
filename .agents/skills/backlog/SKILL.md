@@ -1,15 +1,15 @@
 ---
 name: backlog
-description: Use when the user asks to add, edit, restructure, or reprioritize entries in the sydafa project backlog (backlog.md at the repository root), asks what is in the backlog or to show its table of contents, or wants an existing backlog.md brought into compliance with the canonical structure. Enforces the entry format Context / Problem / Preferred solution path (exactly one) / Priority. Never modify backlog.md without an explicit user request or permission.
+description: Use when the user asks to add, edit, restructure, or reprioritize entries in the sydafa project backlog (docs/backlog.md), asks what is in the backlog or to show its table of contents, or wants an existing backlog.md brought into compliance with the canonical structure. Enforces the entry format Context / Problem / Preferred solution path (exactly one) / Priority. Never modify backlog.md without an explicit user request or permission.
 ---
 
 # sydafa: ведение бэклога (backlog.md)
 
-Скилл для работы с бэклогом проекта — файлом `backlog.md` в корне репозитория.
+Скилл для работы с бэклогом проекта — файлом `docs/backlog.md`.
 
 ## Размещение и режим доступа
 
-- Бэклог — это всегда файл `backlog.md` в корне репозитория (рядом с `README.md`). Не создавай бэклог в других местах и не дублируй его.
+- Бэклог — это всегда файл `docs/backlog.md` (каталог `docs/`). Не создавай бэклог в других местах и не дублируй его.
 - **Заполнять и как-либо изменять `backlog.md` можно только по явному требованию пользователя или с его разрешения.** Никогда не добавляй, не редактируй и не удаляй записи по собственной инициативе — в том числе «попутно», выполняя другую задачу и обнаружив проблему: сначала предложи внести запись в бэклог и дождись согласия.
 - Чтение бэклога (показать записи, ответить «что в бэклоге», найти задачу) разрешения не требует.
 
