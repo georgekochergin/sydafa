@@ -26,3 +26,10 @@ htmlcov/
 .venv
 venv/
 .DS_Store
+
+# Граф кодовой базы graphify: в git — только сам граф.
+# graph.json самодостаточен для запросов; остальное — кэш пересборок
+# и производные артефакты (инструкция: ../datalake_stand/docs/graphify.md)
+graphify-out/*
+!graphify-out/graph.json
+
